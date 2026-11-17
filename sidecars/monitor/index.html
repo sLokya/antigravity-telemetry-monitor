@@ -138,44 +138,47 @@
           <div class="flex items-center gap-1.5 flex-wrap min-w-0">
             <div class="flex items-center gap-1.5">
               <span id="fleetDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-live shrink-0 ring-4 ring-emerald-500/15"></span>
-              <span class="text-sm font-extrabold tracking-tight whitespace-nowrap">并行任务监控台</span>
+              <span id="hudTitleText" class="text-sm font-extrabold tracking-tight whitespace-nowrap">并行任务监控台</span>
             </div>
             <span id="fleetRunningBadge" class="text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 font-semibold whitespace-nowrap">
-              0 前台推理
+              0
             </span>
             <span id="fleetCodexBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/35 font-semibold whitespace-nowrap">
               🟢 0 Codex
             </span>
             <span id="fleetBgBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-300 border border-violet-500/35 font-semibold whitespace-nowrap">
-              ⚙️ 0 后台任务
+              ⚙️ 0
             </span>
           </div>
 
-          <!-- Segmented Filter Pill (Default: 活跃/后台 first!) + Utilities -->
+          <!-- Segmented Filter Pill + Utilities -->
           <div class="flex flex-wrap items-center gap-1.5 max-w-full">
             <div class="inline-flex flex-wrap items-center p-0.5 rounded-lg bg-[var(--background)] border border-[var(--hud-border)] max-w-full">
               <button id="filterRunBtn" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap">
-                最近活跃 <span id="filterRunCount" class="mono opacity-90">(0)</span>
+                <span id="filterRunLabel">最近活跃</span> <span id="filterRunCount" class="mono opacity-90">(0)</span>
               </button>
               <button id="filterCodexBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
-                🟢 Codex <span id="filterCodexCount" class="mono opacity-75">(0)</span>
+                <span id="filterCodexLabel">🟢 Codex</span> <span id="filterCodexCount" class="mono opacity-75">(0)</span>
               </button>
               <button id="filterAllBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
-                全部 <span id="filterAllCount" class="mono opacity-75">(0)</span>
+                <span id="filterAllLabel">全部</span> <span id="filterAllCount" class="mono opacity-75">(0)</span>
               </button>
             </div>
             <div class="inline-flex items-center gap-1.5">
-              <button id="fpLedgerBtn" onclick="toggleFpLedgerDrawer()" title="查看本地 Thinking 签名协议头档案（仅监测厂商签名格式/密钥版本，同系模型共用）" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
-                <span>🔑</span> <span id="fpLedgerBtnLabel">签名头</span>
+              <button id="fpLedgerBtn" onclick="toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <span>🔑</span> <span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span>
               </button>
-              <button id="refreshBtn" title="立即刷新监控数据" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
-                <span>↻</span> <span>刷新</span>
+              <button id="langToggleBtn" onclick="toggleHudLang()" title="Switch language / 切换语言" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <span>🌐</span> <span id="langToggleLabel" class="mono font-semibold">EN</span>
+              </button>
+              <button id="refreshBtn" title="Refresh" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <span>↻</span> <span id="refreshBtnLabel">刷新</span>
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Fingerprint Change Alert Banner (Auto-surfaces when a model signature key changes!) -->
+        <!-- Fingerprint Change Alert Banner -->
         <div id="fpAlertBanner" class="hidden rounded-xl border border-rose-500/50 bg-rose-500/12 px-3 py-2 text-xs"></div>
 
         <!-- Collapsible Local Fingerprint Baseline & Change Ledger Drawer -->
@@ -186,30 +189,30 @@
           <!-- Tile 1: Active / Background Tasks -->
           <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
             <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span class="truncate whitespace-nowrap">运行态<span class="hidden sm:inline"> (前台 / 后台)</span></span>
+              <span class="truncate whitespace-nowrap"><span id="kpiRuntimeLabel">运行态</span><span id="kpiRuntimeSubBracket" class="hidden sm:inline"> (前台 / 后台)</span></span>
               <span class="w-5 h-5 rounded-md bg-sky-500/10 text-sky-500 flex items-center justify-center text-xs font-bold shrink-0">⚡</span>
             </div>
-            <div id="kpiTasks" class="text-sm sm:text-base font-extrabold mono mt-1 tracking-tight whitespace-nowrap truncate">-- 前台 / -- 后台</div>
-            <div id="kpiTasksSub" class="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">实时探测中</div>
+            <div id="kpiTasks" class="text-sm sm:text-base font-extrabold mono mt-1 tracking-tight whitespace-nowrap truncate">-- / --</div>
+            <div id="kpiTasksSub" class="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">--</div>
           </div>
 
           <!-- Tile 2: Effective Fleet TPS -->
           <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
             <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span class="truncate whitespace-nowrap">实时<span class="hidden sm:inline">生成</span>速度</span>
+              <span id="kpiSpeedLabel" class="truncate whitespace-nowrap">实时速度</span>
               <span class="w-5 h-5 rounded-md bg-emerald-500/10 text-emerald-500 flex items-center justify-center text-xs font-bold shrink-0">🚀</span>
             </div>
             <div class="flex items-baseline gap-1 mt-1 whitespace-nowrap">
               <span id="kpiFleetTps" class="text-sm sm:text-base font-extrabold mono text-emerald-600 dark:text-emerald-400">--</span>
               <span class="text-[11px] mono text-[var(--muted-foreground)]">tok/s</span>
             </div>
-            <div id="kpiFleetTpsSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">并行合流吞吐</div>
+            <div id="kpiFleetTpsSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">--</div>
           </div>
 
           <!-- Tile 3: Peak Context Size -->
           <div class="kpi-tile kpi-span-wide rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
             <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span class="truncate whitespace-nowrap">最高上下文<span class="hidden sm:inline">大小</span></span>
+              <span id="kpiMaxCtxLabel" class="truncate whitespace-nowrap">最高上下文大小</span>
               <span class="w-5 h-5 rounded-md bg-amber-500/10 text-amber-500 flex items-center justify-center text-xs font-bold shrink-0">📊</span>
             </div>
             <div id="kpiMaxCtx" class="text-sm sm:text-base font-extrabold mono text-amber-600 dark:text-amber-400 mt-1 truncate">-- / -- (--%)</div>
@@ -220,19 +223,19 @@
           </div>
         </div>
 
-        <!-- Quota Progress Bars Row: 5h Quota & Weekly Quota (Gemini + Claude + Codex) -->
+        <!-- Quota Progress Bars Row -->
         <div class="quota-grid">
           <!-- 5-Hour Quota Card -->
           <div class="kpi-tile rounded-xl px-2.5 py-2 space-y-1.5 min-w-0">
             <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
-                <span class="text-xs font-bold text-[var(--foreground)] truncate">5小时配额</span>
+                <span id="quota5hLabel" class="text-xs font-bold text-[var(--foreground)] truncate">5小时配额</span>
               </div>
               <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">5h</span>
             </div>
             <div id="quota5hPoolsList" class="space-y-1.5 text-xs mono">
-              <div class="text-[11px] text-[var(--muted-foreground)]">正在读取配额池...</div>
+              <div class="text-[11px] text-[var(--muted-foreground)]">--</div>
             </div>
           </div>
 
@@ -241,19 +244,19 @@
             <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="w-2 h-2 rounded-full bg-indigo-500 shrink-0"></span>
-                <span class="text-xs font-bold text-[var(--foreground)] truncate">周窗口配额</span>
+                <span id="quota7dLabel" class="text-xs font-bold text-[var(--foreground)] truncate">周窗口配额</span>
               </div>
               <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">7d</span>
             </div>
             <div id="quotaWeeklyPoolsList" class="space-y-1.5 text-xs mono">
-              <div class="text-[11px] text-[var(--muted-foreground)]">正在读取配额池...</div>
+              <div class="text-[11px] text-[var(--muted-foreground)]">--</div>
             </div>
           </div>
         </div>
 
         <!-- Conversation & Background Task Cards Container -->
         <div id="fleetTasksContainer" class="space-y-2 pt-0.5">
-          <div class="text-xs text-[var(--muted-foreground)] text-center py-4">正在扫描活跃任务与后台进程...</div>
+          <div id="initialScanningMsg" class="text-xs text-[var(--muted-foreground)] text-center py-4">...</div>
         </div>
       </div>
     </div>
@@ -484,7 +487,7 @@
     function fmtAgo(mtimeMs) {
       if (!mtimeMs) return '';
       const sec = Math.max(0, Math.floor((Date.now() - mtimeMs) / 1000));
-      if (sec < 5) return '刚刚';
+      if (sec < 5) return tHud('agoJust');
       if (sec < 60) return `${sec}s`;
       const min = Math.floor(sec / 60);
       if (min < 60) return `${min}m`;
@@ -503,7 +506,7 @@
     }
 
     function fmtResetCountdown(diffMs) {
-      if (diffMs <= 0) return '即将刷新';
+      if (diffMs <= 0) return tHud('quotaResetSoon');
       const totalMins = Math.ceil(diffMs / 60000);
       if (totalMins < 60) return `${totalMins}m`;
       const totalHours = Math.floor(totalMins / 60);
@@ -530,18 +533,18 @@
     }
 
     function fmtResetFull(iso) {
-      if (!iso) return '刷新时间: --';
+      if (!iso) return tHud('quotaResetUnknown');
       const diffMs = new Date(iso).getTime() - Date.now();
-      if (diffMs <= 0) return '即将刷新';
+      if (diffMs <= 0) return tHud('quotaResetSoon');
       const clock = fmtResetClock(iso);
       const cd = fmtResetCountdown(diffMs);
-      return `${clock} 刷新 (剩 ${cd})`;
+      return `${clock} (${tHud('quotaResetLeft', cd)})`;
     }
 
     function fmtResetTime(iso) {
       if (!iso) return '';
       const diffMs = new Date(iso).getTime() - Date.now();
-      if (diffMs <= 0) return '(即将刷新)';
+      if (diffMs <= 0) return `(${tHud('quotaResetSoon')})`;
       const clock = fmtResetClock(iso);
       const cd = fmtResetCountdown(diffMs);
       return `(${clock} · ${cd})`;
@@ -662,18 +665,16 @@
       const events = ledger.events || [];
       const changedBaselines = baselines.filter(b => b.status === 'CHANGED');
 
-      // Update header button label
       const btnLabel = document.getElementById('fpLedgerBtnLabel');
       const btn = document.getElementById('fpLedgerBtn');
       if (changedBaselines.length > 0 || ledger.unackedCount > 0) {
-        btnLabel.textContent = `签名头变更 (${changedBaselines.length || ledger.unackedCount})`;
-        btn.className = 'text-xs px-2.5 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold transition flex items-center gap-1';
+        btnLabel.textContent = `${tHud('btnSig')} (${changedBaselines.length || ledger.unackedCount})`;
+        btn.className = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold transition flex items-center gap-1 whitespace-nowrap';
       } else {
-        btnLabel.textContent = `签名头 (${baselines.length})`;
-        btn.className = 'text-xs px-2.5 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1';
+        btnLabel.textContent = `${tHud('btnSig')} (${baselines.length})`;
+        btn.className = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap';
       }
 
-      // Render auto-alert banner when signature header changes
       const banner = document.getElementById('fpAlertBanner');
       if (changedBaselines.length > 0) {
         banner.classList.remove('hidden');
@@ -681,17 +682,17 @@
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-1.5">
               <span class="text-sm">🔑</span>
-              <span class="font-bold text-amber-600 dark:text-amber-400">Thinking 签名协议头变化:</span>
+              <span class="font-bold text-amber-600 dark:text-amber-400">${escapeHtml(tHud('fpAlertTitle', changedBaselines.length))}:</span>
               <span class="mono font-bold text-[var(--foreground)]">${escapeHtml(b.modelFamily)}</span>
               <span class="mono text-[11px] text-[var(--muted-foreground)]">
-                原头 <code class="px-1 py-0.5 rounded bg-[var(--card)] border border-[var(--hud-border)]">0x${escapeHtml(b.baselineKeyHex)}</code>
-                → 当前 <code class="px-1 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/40 font-bold">0x${escapeHtml(b.latestKeyHex)}</code>
+                <code class="px-1 py-0.5 rounded bg-[var(--card)] border border-[var(--hud-border)]">0x${escapeHtml(b.baselineKeyHex)}</code>
+                → <code class="px-1 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/40 font-bold">0x${escapeHtml(b.latestKeyHex)}</code>
               </span>
             </div>
             <div class="flex items-center gap-1.5">
               <button onclick="ackFingerprintChange('${escapeHtml(b.modelFamily)}')"
                       class="px-2.5 py-0.5 rounded-md bg-amber-600 text-white hover:bg-amber-500 font-semibold text-[11px] transition shadow-sm">
-                ✓ 确认并更新基线
+                ${escapeHtml(tHud('fpAckAll'))}
               </button>
             </div>
           </div>
@@ -701,26 +702,24 @@
         banner.innerHTML = '';
       }
 
-      // Render collapsible ledger drawer
       const drawer = document.getElementById('fpLedgerDrawer');
       if (!fpLedgerDrawerOpen) return;
 
       drawer.innerHTML = `
         <div class="flex items-center justify-between border-b border-[var(--hud-border)] pb-1.5">
           <div class="flex items-center gap-1.5 text-xs font-bold flex-wrap">
-            <span>🔑 Thinking 签名协议头档案</span>
-            <span class="text-[11px] font-normal text-[var(--muted-foreground)]">(仅监测厂商签名格式/密钥轮换；同系 Gemini 共用前缀 0x0169147d13，无法区分具体型号或是否降智)</span>
+            <span>${escapeHtml(tHud('fpDrawerTitle'))}</span>
           </div>
-          <button onclick="toggleFpLedgerDrawer()" class="text-[11px] px-2 py-0.5 rounded border border-[var(--hud-border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-            收起 ✕
+          <button onclick="toggleFpLedgerDrawer()" class="text-[11px] px-2 py-0.5 rounded border border-[var(--hud-border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] whitespace-nowrap">
+            ${escapeHtml(tHud('fpClose'))} ✕
           </button>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-          ${baselines.length === 0 ? `<div class="text-xs text-[var(--muted-foreground)] py-1">暂无已记录的签名头档案</div>` : baselines.map(b => {
+          ${baselines.length === 0 ? `<div class="text-xs text-[var(--muted-foreground)] py-1">${escapeHtml(tHud('fpEmpty'))}</div>` : baselines.map(b => {
             const isChanged = b.status === 'CHANGED';
             const statusHtml = isChanged
-              ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35 text-[10px] font-bold">⚠ 协议头变化</span>`
-              : `<span class="px-1.5 py-0.5 rounded bg-slate-500/12 text-[var(--muted-foreground)] border border-[var(--hud-border)] text-[10px] font-medium">协议头未变</span>`;
+              ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35 text-[10px] font-bold">${escapeHtml(tHud('fpChanged'))}</span>`
+              : `<span class="px-1.5 py-0.5 rounded bg-slate-500/12 text-[var(--muted-foreground)] border border-[var(--hud-border)] text-[10px] font-medium">${escapeHtml(tHud('fpMatched'))}</span>`;
             return `
               <div class="bg-[var(--card)] border border-[var(--hud-border)] rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs mono">
                 <div class="min-w-0">
@@ -730,12 +729,12 @@
                   </div>
                   <div class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
                     Key: <strong class="text-indigo-600 dark:text-indigo-400">0x${escapeHtml(b.latestKeyHex)}</strong>
-                    ${isChanged ? `(原 0x${escapeHtml(b.baselineKeyHex)})` : ''} · 通道: ${escapeHtml(b.apiProvider)}
+                    ${isChanged ? `(0x${escapeHtml(b.baselineKeyHex)})` : ''} · ${escapeHtml(b.apiProvider)}
                   </div>
                 </div>
                 <div class="text-right text-[10px] text-[var(--muted-foreground)] shrink-0">
-                  <div>核验 ${fmtNum(b.verifiedCount || 1)} 次</div>
-                  <div>最近 ${fmtAgo(b.lastSeenMs)}</div>
+                  <div>×${fmtNum(b.verifiedCount || 1)}</div>
+                  <div>${fmtAgo(b.lastSeenMs)}</div>
                 </div>
               </div>
             `;
@@ -743,12 +742,11 @@
         </div>
         ${events.length > 0 ? `
           <div class="pt-1 border-t border-[var(--hud-border)]/60 space-y-1">
-            <div class="text-[11px] font-semibold text-[var(--muted-foreground)]">最近指纹记录与异动日志:</div>
             <div class="max-h-24 overflow-y-auto space-y-1 text-[11px] mono">
               ${events.slice(0, 6).map(e => {
                 const tag = e.type === 'KEY_CHANGED'
-                  ? `<span class="text-rose-500 font-bold">[密钥变更]</span> 0x${escapeHtml(e.prevKeyHex)} → 0x${escapeHtml(e.newKeyHex)}`
-                  : `<span class="text-emerald-600 dark:text-emerald-400">[建立基线]</span> 0x${escapeHtml(e.newKeyHex)}`;
+                  ? `<span class="text-rose-500 font-bold">[KEY]</span> 0x${escapeHtml(e.prevKeyHex)} → 0x${escapeHtml(e.newKeyHex)}`
+                  : `<span class="text-emerald-600 dark:text-emerald-400">[INIT]</span> 0x${escapeHtml(e.newKeyHex)}`;
                 return `<div class="flex items-center justify-between text-[var(--muted-foreground)]">
                   <span class="truncate">${tag} · ${escapeHtml(e.modelFamily)} (${escapeHtml(e.conversationTitle || '')})</span>
                   <span class="shrink-0 ml-2">${fmtAgo(e.timestampMs)}</span>
@@ -761,31 +759,32 @@
     }
 
     function getDiagTagStyle(diag) {
-      if (!diag) return { cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold', label: '✓ 正常', detail: '' };
+      if (!diag) return { cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold', label: trDiagLabel(null), detail: '' };
+      const label = trDiagLabel(diag);
       if (diag.level === 'ALERT') {
         return {
           cls: 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/40 font-bold pulse-live',
-          label: diag.label,
+          label,
           detail: diag.detail || '',
         };
       }
       if (diag.level === 'WARN') {
         return {
           cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/40 font-bold',
-          label: diag.label,
+          label,
           detail: diag.detail || '',
         };
       }
       if (diag.level === 'INFO') {
         return {
           cls: 'bg-amber-500/10 text-amber-600/90 dark:text-amber-400/90 border-amber-500/25 font-medium',
-          label: diag.label,
+          label,
           detail: diag.detail || '',
         };
       }
       return {
         cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold',
-        label: diag.label || '✓ 正常',
+        label,
         detail: diag.detail || '',
       };
     }
@@ -797,26 +796,25 @@
       const hasContent = cp.isRunning || cp.latestCommentary || cp.currentAction || actions.length > 0;
       if (!hasContent) return '';
 
-      // When IDLE and not expanded, show a compact wrapping summary bar so text is never crushed
       if (!cp.isRunning && !isTimelineOpen) {
-        const summaryText = cp.latestCommentary || cp.currentAction || `已完成 ${cp.stepCount || 1} 步执行`;
+        const summaryText = cp.latestCommentary || cp.currentAction || `${cp.stepCount || 1} steps`;
         return `
           <div class="mt-1.5 pt-1.5 border-t border-[var(--hud-border)]/70 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px]"
                onclick="event.stopPropagation()">
             <div class="flex items-center gap-1.5 min-w-[160px] flex-1 text-[var(--muted-foreground)]">
               <span class="px-1.5 py-0.2 rounded bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 mono font-semibold shrink-0">
-                ${isLinkedFromAgy ? `✅ Codex 协同已完成 (${escapeHtml(linkedMeta?.exactModelId || 'Codex')})` : `✅ 第 ${cp.turnNumber || 1} 轮已完成 · ${cp.stepCount || 0} 步 (${cp.cmdCount || 0} 命令 / ${cp.fileChangeCount || 0} 改文件)`}
+                ${isLinkedFromAgy ? escapeHtml(tHud('codexSynergyDone', linkedMeta?.exactModelId || 'Codex')) : escapeHtml(tHud('codexDoneSummary', cp.turnNumber || 1, cp.stepCount || 0, cp.cmdCount || 0, cp.fileChangeCount || 0))}
               </span>
               <span class="truncate text-[var(--foreground)]/90" title="${escapeHtml(summaryText)}">
                 💬 ${escapeHtml(summaryText)}
               </span>
             </div>
             <div class="flex items-center gap-1 shrink-0 mono ml-auto">
-              ${cp.elapsedSec > 0 ? `<span class="px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--muted-foreground)]">耗时 ${fmtElapsed(cp.elapsedSec)}</span>` : ''}
+              ${cp.elapsedSec > 0 ? `<span class="px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--muted-foreground)]">${escapeHtml(tHud('durPrefix'))} ${fmtElapsed(cp.elapsedSec)}</span>` : ''}
               ${actions.length > 0 ? `
                 <button onclick="toggleCodexTimeline(event, '${convId}')"
                         class="px-2 py-0.5 rounded border border-[var(--hud-border)] bg-[var(--card)] hover:border-emerald-500/50 hover:text-emerald-600 font-sans font-medium transition">
-                  📜 过程 (${actions.length})
+                  ${escapeHtml(tHud('codexTraceBtn', actions.length))}
                 </button>
               ` : ''}
               ${isLinkedFromAgy && linkedMeta?.conversationId ? `
@@ -830,32 +828,30 @@
         `;
       }
 
-      // Active running Codex turn OR expanded timeline drawer
       return `
         <div class="mt-2 pt-2 border-t border-[var(--hud-border)]/80" onclick="event.stopPropagation()">
           <div class="rounded-xl px-3 py-2.5 space-y-2 border ${cp.isRunning ? 'border-emerald-500/45 bg-emerald-500/8' : 'border-[var(--hud-border)] bg-[var(--background)]/75'}">
-            <!-- Header Row: Left Title & Stats Wrap Cleanly, Right Controls Never Overlap -->
             <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs">
               <div class="flex flex-wrap items-center gap-1.5 min-w-0">
                 <span class="w-2 h-2 rounded-full ${cp.isRunning ? 'bg-emerald-500 pulse-live' : 'bg-emerald-500'} shrink-0"></span>
                 <span class="font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                   ${cp.isRunning
-                    ? (isLinkedFromAgy ? `🟢 Codex 协同运行中 (${escapeHtml(linkedMeta?.exactModelId || '')})` : '🟢 Codex 实时工作进度')
-                    : (isLinkedFromAgy ? `✅ Codex 协同已完成 (${escapeHtml(linkedMeta?.exactModelId || '')})` : '✅ Codex 回合已完成')}
+                    ? (isLinkedFromAgy ? escapeHtml(tHud('codexSynergyRun', linkedMeta?.exactModelId || '')) : escapeHtml(tHud('codexProgressRun')))
+                    : (isLinkedFromAgy ? escapeHtml(tHud('codexSynergyDone', linkedMeta?.exactModelId || '')) : escapeHtml(tHud('codexProgressDone')))}
                 </span>
                 <span class="mono text-[11px] px-2 py-0.5 rounded-md border border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 whitespace-nowrap font-medium">
-                  第 ${cp.turnNumber || 1} 轮 · ${cp.isRunning ? '已执行' : '共执行'} ${cp.stepCount || 0} 步 (${cp.cmdCount || 0} 命令 / ${cp.fileChangeCount || 0} 改文件)
+                  ${escapeHtml(tHud('codexTurnBadge', cp.turnNumber || 1, cp.isRunning, cp.stepCount || 0, cp.cmdCount || 0, cp.fileChangeCount || 0))}
                 </span>
               </div>
 
               <div class="flex items-center gap-1.5 shrink-0 mono ml-auto">
                 <span class="${cp.isRunning ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/12 border-emerald-500/25' : 'text-[var(--muted-foreground)] bg-[var(--muted)] border-[var(--hud-border)]'} font-bold text-[11px] px-2 py-0.5 rounded-md border whitespace-nowrap">
-                  ${cp.isRunning ? `⏱ 运行中 ${fmtElapsed(cp.elapsedSec)}` : `✅ 已完成 · 耗时 ${fmtElapsed(cp.elapsedSec)}`}
+                  ${cp.isRunning ? `⏱ ${fmtElapsed(cp.elapsedSec)}` : `✅ ${fmtElapsed(cp.elapsedSec)}`}
                 </span>
                 ${actions.length > 0 ? `
                   <button onclick="toggleCodexTimeline(event, '${convId}')"
                           class="px-2 py-0.5 rounded-md border border-[var(--hud-border)] bg-[var(--card)] hover:border-emerald-500/50 hover:text-emerald-600 transition text-[11px] font-sans font-medium whitespace-nowrap">
-                    ${isTimelineOpen ? '收起过程 ▴' : `📜 过程明细 (${actions.length})`}
+                    ${isTimelineOpen ? escapeHtml(tHud('codexTraceHide')) : escapeHtml(tHud('codexTraceFullBtn', actions.length))}
                   </button>
                 ` : ''}
                 ${isLinkedFromAgy && linkedMeta?.conversationId ? `
@@ -867,7 +863,7 @@
                 ${cp.isRunning && cp.bridgePid ? `
                   <button onclick="stopCodexTurn(event, '${cp.threadId}')"
                           class="px-2 py-0.5 rounded-md border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 font-sans font-bold transition text-[11px] whitespace-nowrap">
-                    🛑 停止
+                    ${escapeHtml(tHud('bgStop'))}
                   </button>
                 ` : ''}
               </div>
@@ -875,7 +871,7 @@
 
             ${cp.latestCommentary ? `
               <div class="text-xs text-[var(--foreground)] bg-[var(--card)]/90 px-2.5 py-2 rounded-lg border border-[var(--hud-border)]/80 leading-relaxed">
-                <span class="font-bold text-emerald-600 dark:text-emerald-400 mr-1">${cp.isRunning ? '💬 最新进展:' : '💬 完成总结:'}</span>
+                <span class="font-bold text-emerald-600 dark:text-emerald-400 mr-1">${escapeHtml(cp.isRunning ? tHud('codexCommentRun') : tHud('codexCommentDone'))}</span>
                 <span>${escapeHtml(cp.latestCommentary)}</span>
               </div>
             ` : ''}
@@ -891,7 +887,7 @@
               <div data-scroll-id="codex-tl-${escapeHtml(convId)}"
                    class="mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-1.5 text-slate-200 max-h-48 overflow-y-auto">
                 <div class="text-[10px] text-slate-400 mono border-b border-slate-800 pb-1 flex items-center justify-between">
-                  <span>Codex 实时执行流水线 (最近 ${actions.length} 步 · 每 1.5s 自动同步)</span>
+                  <span>Codex (${actions.length})</span>
                   <span>Thread: ${escapeHtml((cp.threadId || '').slice(0, 8))}</span>
                 </div>
                 ${[...actions].reverse().map(act => `
@@ -909,9 +905,13 @@
     }
 
   </script>
+  <script src="/ui_i18n.js"></script>
   <script src="/ui_inline_detail.js"></script>
   <script src="/ui_fleet_cards.js"></script>
   <script>
+    if (typeof window.applyStaticI18n === 'function') window.applyStaticI18n();
+    const initScan = document.getElementById('initialScanningMsg');
+    if (initScan && typeof window.tHud === 'function') initScan.textContent = window.tHud('scanning');
     updateFilterButtonsUI();
     fetchTelemetry();
     setInterval(fetchTelemetry, 1500);

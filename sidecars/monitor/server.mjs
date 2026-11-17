@@ -2680,7 +2680,7 @@ async function buildTelemetryPayload(requestedConvId) {
 
   let uiMtimeVer = 10;
   try {
-    const uiFiles = ['index.html', 'ui_fleet_cards.js', 'ui_inline_detail.js'];
+    const uiFiles = ['index.html', 'ui_i18n.js', 'ui_fleet_cards.js', 'ui_inline_detail.js'];
     let maxMt = 0;
     for (const f of uiFiles) {
       const fp = join(__dirname, f);
@@ -2882,8 +2882,13 @@ const noCacheHeaders = {
 
 function renderAssembledIndexHtml() {
   let html = readFileSync(join(__dirname, 'index.html'), 'utf-8');
+  const i18nJs = readFileSync(join(__dirname, 'ui_i18n.js'), 'utf-8');
   const detailJs = readFileSync(join(__dirname, 'ui_inline_detail.js'), 'utf-8');
   const fleetJs = readFileSync(join(__dirname, 'ui_fleet_cards.js'), 'utf-8');
+  html = html.replace(
+    '<script src="/ui_i18n.js"></script>',
+    `<script>\n${i18nJs}\n</script>`
+  );
   html = html.replace(
     '<script src="/ui_inline_detail.js"></script>',
     `<script>\n${detailJs}\n</script>`

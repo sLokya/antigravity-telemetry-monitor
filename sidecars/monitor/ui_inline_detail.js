@@ -29,12 +29,19 @@
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  const PILL_CLS = 'metric-pill inline-flex flex-wrap items-center gap-1 px-2 py-0.5 rounded-md text-[11px] leading-4 mono';
+
+  function sp() {
+    return window.getHudLang() === 'en' ? ' ' : '';
+  }
+
   function fmtQuotaUsageBadges(q, isRunning) {
     if (!q) {
       return `
-        <span class="text-[11px] mono px-2 py-0.5 rounded-md border border-[var(--hud-border)] bg-[var(--background)]/60 text-[var(--muted-foreground)] whitespace-nowrap"
-              title="无此轮运行期间的配额快照记录（历史任务或插件未监听期间）">
-          配额 5h -- · 周 --
+        <span class="${PILL_CLS} whitespace-nowrap"
+              title="${escapeHtml(tHud('quotaNoneTip'))}">
+          <span class="text-[var(--muted-foreground)]">🔋 ${escapeHtml(tHud('quotaLabel'))}</span>
+          <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('quotaEmpty'))}</span>
         </span>
       `;
     }
@@ -44,38 +51,34 @@
     const bothZero = (u5 === 0 || u5 === null) && (uw === 0 || uw === null);
 
     if (bothZero) {
-      const label = isRunning ? '5h/周 配额同步中…' : '5h <0.01% · 周 <0.01%';
-      const tip = isRunning
-        ? '已开始跟踪配额快照，上游配额池有短暂同步延迟，降幅出现后将实时更新'
-        : '本轮期间上游配额池降幅小于 0.01%';
+      const label = isRunning ? tHud('quotaSyncing') : `5h <0.01% · ${tHud('quotaWeek')} <0.01%`;
+      const tip = isRunning ? tHud('quotaWaitTip') : tHud('quotaRecordedTip');
       return `
-        <span class="text-[11px] mono px-2 py-0.5 rounded-md border border-sky-500/25 bg-sky-500/8 text-sky-600 dark:text-sky-400 whitespace-nowrap"
+        <span class="${PILL_CLS} whitespace-nowrap"
               title="${escapeHtml(tip)}">
-          🔋 ${label}
+          <span class="text-[var(--muted-foreground)]">🔋 ${escapeHtml(tHud('quotaLabel'))}</span>
+          <span class="text-sky-600 dark:text-sky-400 font-semibold">${escapeHtml(label)}</span>
         </span>
       `;
     }
 
     const f5 = u5 !== null && u5 !== undefined ? `${approx}-${u5}%` : '--';
     const fw = uw !== null && uw !== undefined ? `${approx}-${uw}%` : '--';
-    const tip = q.source === 'codex_rollout'
-      ? '基于 Codex rollout 日志 rate_limits 计算的本轮配额消耗'
-      : q.isApproxConcurrent
-        ? '同配额池存在多个并发任务，已按并发期间 Token 权重近似分摊（~）'
-        : '基于本轮运行期间配额池实际降幅统计';
-    const cls = q.isApproxConcurrent
-      ? 'border-amber-500/35 bg-amber-500/12 text-amber-600 dark:text-amber-300'
-      : 'border-sky-500/35 bg-sky-500/12 text-sky-600 dark:text-sky-300';
+    const tip = q.isApproxConcurrent ? tHud('quotaConcurrentTip') : tHud('quotaRecordedTip');
+    const valCls = q.isApproxConcurrent
+      ? 'text-amber-600 dark:text-amber-300 font-bold'
+      : 'text-sky-600 dark:text-sky-300 font-bold';
     return `
-      <span class="text-[11px] mono font-semibold px-2 py-0.5 rounded-md border ${cls} whitespace-nowrap" title="${escapeHtml(tip)}">
-        🔋 5h ${escapeHtml(f5)} · 周 ${escapeHtml(fw)}
+      <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tip)}">
+        <span class="text-[var(--muted-foreground)]">🔋</span>
+        <span class="${valCls}">5h ${escapeHtml(f5)} · ${escapeHtml(tHud('quotaWeek'))} ${escapeHtml(fw)}</span>
       </span>
     `;
   }
 
   function renderTurnSubStepsHtml(steps) {
     if (!Array.isArray(steps) || steps.length === 0) {
-      return '<div class="text-[11px] text-[var(--muted-foreground)] px-2 py-1.5">本轮暂无底层 LLM 调用记录</div>';
+      return `<div class="text-[11px] text-[var(--muted-foreground)] px-2 py-1.5">${escapeHtml(tHud('subStepEmpty'))}</div>`;
     }
     return `
       <div class="overflow-x-auto max-h-44 overflow-y-auto rounded-lg border border-[var(--hud-border)] bg-[var(--card)]">
@@ -83,26 +86,26 @@
           <thead class="bg-[var(--background)] text-[var(--muted-foreground)] sticky top-0 border-b border-[var(--hud-border)]">
             <tr>
               <th class="py-1 px-2 font-semibold">#</th>
-              <th class="py-1 px-2 font-semibold">模型</th>
-              <th class="py-1 px-2 font-semibold text-right">流式</th>
-              <th class="py-1 px-2 font-semibold text-right">缓存</th>
-              <th class="py-1 px-2 font-semibold text-right">TTFT/流</th>
-              <th class="py-1 px-2 font-semibold text-right">输出(思/答)</th>
-              <th class="py-1 px-2 font-semibold text-right">诊断</th>
+              <th class="py-1 px-2 font-semibold">${escapeHtml(tHud('thModel'))}</th>
+              <th class="py-1 px-2 font-semibold text-right">${escapeHtml(tHud('thSpeed'))}</th>
+              <th class="py-1 px-2 font-semibold text-right">${escapeHtml(tHud('thCache'))}</th>
+              <th class="py-1 px-2 font-semibold text-right">${escapeHtml(tHud('thTtft'))}</th>
+              <th class="py-1 px-2 font-semibold text-right">${escapeHtml(tHud('thOut'))}</th>
+              <th class="py-1 px-2 font-semibold text-right">${escapeHtml(tHud('thDiag'))}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-[var(--hud-border)] mono">
             ${[...steps].reverse().map((s) => {
               const flags = [];
-              if (s.isRouteMismatch) flags.push('<span class="text-rose-500 font-bold">路由偏离</span>');
-              if (s.rateLimitRetries > 0) flags.push(`<span class="text-amber-500 font-bold">限流${s.rateLimitRetries}x</span>`);
-              else if (s.netRetries > 0) flags.push(`<span class="text-sky-500">重连${s.netRetries}x</span>`);
-              if (s.pureQueueSec >= 15 && s.ttftSec >= 20) flags.push('<span class="text-amber-500">高延迟</span>');
-              if (s.isCotCollapsed) flags.push('<span class="text-rose-500">少思</span>');
-              if (s.isCacheShock) flags.push('<span class="text-amber-500">破缓</span>');
+              if (s.isRouteMismatch) flags.push(`<span class="text-rose-500 font-bold">${escapeHtml(tHud('stepMismatch'))}</span>`);
+              if (s.rateLimitRetries > 0) flags.push(`<span class="text-amber-500 font-bold">${escapeHtml(tHud('stepRateLimit', s.rateLimitRetries))}</span>`);
+              else if (s.netRetries > 0) flags.push(`<span class="text-sky-500">${escapeHtml(tHud('stepNetRetry', s.netRetries))}</span>`);
+              if (s.pureQueueSec >= 15 && s.ttftSec >= 20) flags.push(`<span class="text-amber-500">${escapeHtml(tHud('stepHighLat'))}</span>`);
+              if (s.isCotCollapsed) flags.push(`<span class="text-rose-500">${escapeHtml(tHud('stepLowCot'))}</span>`);
+              if (s.isCacheShock) flags.push(`<span class="text-amber-500">${escapeHtml(tHud('stepCacheShock'))}</span>`);
               const diagHtml = flags.length > 0 ? flags.join(' ') : '<span class="text-emerald-500/80">✓</span>';
               const speedHtml = s.isBufferedFlush || s.streamingTps <= 0
-                ? `<span class="text-[var(--muted-foreground)]" title="缓冲刷出 (${s.streamSec}s)">缓冲(${s.effectiveTps})</span>`
+                ? `<span class="text-[var(--muted-foreground)]" title="${escapeHtml(tHud('bufferedTip', s.streamSec))}">${escapeHtml(tHud('buffered'))}(${s.effectiveTps})</span>`
                 : `<span class="font-bold text-emerald-600 dark:text-emerald-400">${s.streamingTps}</span>`;
               return `
                 <tr class="hover:bg-[var(--background)]/60">
@@ -133,7 +136,7 @@
           <div class="flex flex-col items-center flex-1 max-w-[26px] min-w-[10px] h-full justify-end">
             <span class="text-[9px] mono text-[var(--muted-foreground)] leading-none mb-0.5">--</span>
             <div class="w-full rounded-t bg-slate-400/35" style="height: 15%"
-                 title="轮次 #${tr.turnNumber} | 总Token: ${fmtNum(tr.totalTokens)} | 缓存: ${tr.cacheHitRate}%"></div>
+                 title="${escapeHtml(tHud('turnSparkNoSpeedTip', tr.turnNumber, fmtNum(tr.totalTokens), tr.cacheHitRate))}"></div>
           </div>
         `;
       }
@@ -143,7 +146,7 @@
         <div class="flex flex-col items-center flex-1 max-w-[26px] min-w-[10px] h-full justify-end">
           <span class="text-[10px] mono text-[var(--muted-foreground)] leading-none mb-0.5">${Math.round(tr.streamingTps)}</span>
           <div class="w-full rounded-t ${barCls} transition-all" style="height: ${hPct}%"
-               title="轮次 #${tr.turnNumber} | 流式: ${tr.streamingTps} tok/s | 缓存: ${tr.cacheHitRate}% | 总Token: ${fmtNum(tr.totalTokens)}"></div>
+               title="${escapeHtml(tHud('turnSparkTip', tr.turnNumber, tr.streamingTps, tr.cacheHitRate, fmtNum(tr.totalTokens)))}"></div>
         </div>
       `;
     }).join('');
@@ -160,8 +163,8 @@
     if (!isSynced) {
       return `
         <div onclick="event.stopPropagation()" class="mt-1.5 rounded-xl border border-sky-500/35 bg-[var(--background)]/80 p-3 text-xs text-[var(--muted-foreground)] flex items-center justify-between">
-          <span>正在加载「${escapeHtml(task.title)}」的轮次任务与诊断详情...</span>
-          <button onclick="closeInlineDetail(event)" class="px-2 py-0.5 rounded border border-[var(--hud-border)] hover:text-[var(--foreground)] whitespace-nowrap">✕ 收起</button>
+          <span>${escapeHtml(tHud('detailLoading', task.title))}</span>
+          <button onclick="closeInlineDetail(event)" class="px-2 py-0.5 rounded border border-[var(--hud-border)] hover:text-[var(--foreground)] whitespace-nowrap">✕ ${escapeHtml(tHud('fpClose'))}</button>
         </div>
       `;
     }
@@ -172,7 +175,7 @@
     const turns = Array.isArray(data.turns) ? data.turns : [];
     const curTurn = sum.currentTurn || task.currentTurn || null;
     const isCurRunning = Boolean(sum.isCurrentRunning ?? task.isCurrentRunning);
-    const turnTag = isCurRunning ? '本轮' : '末轮';
+    const turnTag = tHud(isCurRunning ? 'turnCur' : 'turnLast');
     const hasCurSteps = (curTurn?.stepCount || 0) > 0;
 
     const curStreamTps = hasCurSteps && curTurn?.streamingTps > 0 ? curTurn.streamingTps : '--';
@@ -201,80 +204,89 @@
 
     const healthLevel = sum.healthLevel || 'OK';
     const healthBadges = sum.healthBadges || [];
-    let diagBadgeText = '✓ 无异常重试';
+    const localizedBadges = healthBadges.map((b) => trDiagLabel({ code: b.type, label: b.label }));
+    let diagBadgeText = tHud('diagHealthy');
     let diagBadgeCls = 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/25';
     if (healthLevel === 'ALERT') {
-      diagBadgeText = `🚨 ${healthBadges.map((b) => b.label).join(' · ')}`;
+      diagBadgeText = `🚨 ${localizedBadges.join(' · ')}`;
       diagBadgeCls = 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/35';
     } else if (healthLevel === 'WARN') {
-      diagBadgeText = `⚠️ ${healthBadges.map((b) => b.label).join(' · ')}`;
+      diagBadgeText = `⚠️ ${localizedBadges.join(' · ')}`;
       diagBadgeCls = 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/35';
-    } else if (healthBadges.length > 0) {
-      diagBadgeText = healthBadges.map((b) => b.label).join(' · ');
+    } else if (localizedBadges.length > 0) {
+      diagBadgeText = localizedBadges.join(' · ');
       diagBadgeCls = 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/25';
     }
 
     const doneBgList = (task.backgroundTasks || []).filter((b) => !b.isRunning);
+    const avgPfx = `${tHud('sessionAvgPrefix')}${sp()}`;
+    const peakPfx = `${tHud('peakShort')}${sp()}`;
+    const totPfx = `${tHud('totalShort')}${sp()}`;
+    const outPfx = `${tHud('outPrefix')}${sp()}`;
+    const durPfx = `${tHud('durPrefix')}${sp()}`;
+    const inTag = `${tHud('tokIn')}${sp()}`;
+    const cacheTag = `${tHud('tokCache')}${sp()}`;
+    const outTag = `${tHud('tokOut')}${sp()}`;
 
     return `
       <div onclick="event.stopPropagation()" class="mt-1.5 rounded-xl border border-sky-500/40 bg-[var(--background)]/75 p-2.5 space-y-2.5 shadow-sm">
         <!-- Inline Header Bar -->
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--hud-border)] pb-2">
           <div class="flex items-center gap-1.5 min-w-0 flex-1 text-xs">
-            <span class="font-bold text-sky-600 dark:text-sky-400 shrink-0 whitespace-nowrap">${turnTag}任务 &amp; 会话详情</span>
+            <span class="font-bold text-sky-600 dark:text-sky-400 shrink-0 whitespace-nowrap">${escapeHtml(tHud('detailTitle', turnTag))}</span>
             <span class="text-[var(--muted-foreground)] truncate" title="${escapeHtml(data.liveDetail || '')}">${escapeHtml(data.liveDetail || '')}</span>
           </div>
-          <button onclick="closeInlineDetail(event)" class="text-xs px-2 py-0.5 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 font-semibold shrink-0 whitespace-nowrap">
-            收起 ▴
+          <button onclick="closeInlineDetail(event)" class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 font-semibold shrink-0 whitespace-nowrap">
+            ${escapeHtml(tHud('collapseBtn'))}
           </button>
         </div>
 
         <!-- Model + Pool Quota Strip -->
         <div class="kpi-tile rounded-xl p-2 space-y-1.5">
           <div class="flex flex-wrap items-center gap-1.5 text-xs">
-            <span class="text-[var(--muted-foreground)]">配置:</span>
+            <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('cfgModel'))}:</span>
             <code class="mono font-bold px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">${escapeHtml(latest?.exactModelId || latest?.responseModel || task.exactModelId || '--')}</code>
-            <span class="text-[var(--muted-foreground)]">返回:</span>
+            <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('respModel'))}:</span>
             <code class="mono font-semibold px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--hud-border)]">${escapeHtml(latest?.responseModel || task.responseModel || '--')}</code>
-            <span class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml((latest?.modelLabel || selModel.label || '--') + (latest?.execModelId ? ` · 执行器:${latest.execModelId}` : ''))}</span>
+            <span class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml((latest?.modelLabel || selModel.label || '--') + (latest?.execModelId ? ` · ${tHud('execModel')}:${latest.execModelId}` : ''))}</span>
           </div>
           <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pt-1 border-t border-[var(--hud-border)] text-[11px] mono">
-            <span>所属池 5h <strong class="text-sky-600 dark:text-sky-400">${quotaFrac !== null && quotaFrac !== undefined ? `${(quotaFrac * 100).toFixed(1)}%` : '--%'}</strong> <span class="text-[var(--muted-foreground)]">${escapeHtml(fmtResetTime(quotaReset))}</span></span>
+            <span>${escapeHtml(tHud('poolLabel'))} 5h <strong class="text-sky-600 dark:text-sky-400">${quotaFrac !== null && quotaFrac !== undefined ? `${(quotaFrac * 100).toFixed(1)}%` : '--%'}</strong> <span class="text-[var(--muted-foreground)]">${escapeHtml(fmtResetTime(quotaReset))}</span></span>
             <span class="text-[var(--muted-foreground)]">|</span>
-            <span>周 <strong class="text-indigo-600 dark:text-indigo-400">${quotaWkFrac !== null && quotaWkFrac !== undefined ? `${(quotaWkFrac * 100).toFixed(1)}%` : '--%'}</strong> <span class="text-[var(--muted-foreground)]">${escapeHtml(fmtResetTime(quotaWkReset))}</span></span>
+            <span>${escapeHtml(tHud('quotaWeek'))} <strong class="text-indigo-600 dark:text-indigo-400">${quotaWkFrac !== null && quotaWkFrac !== undefined ? `${(quotaWkFrac * 100).toFixed(1)}%` : '--%'}</strong> <span class="text-[var(--muted-foreground)]">${escapeHtml(fmtResetTime(quotaWkReset))}</span></span>
             <span class="text-[var(--muted-foreground)]">|</span>
-            <span class="text-[var(--muted-foreground)]">会话累计 <strong class="text-[var(--foreground)]">${allTokensStr}</strong> tok</span>
+            <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('sessionTotal'))} <strong class="text-[var(--foreground)]">${allTokensStr}</strong> tok</span>
           </div>
         </div>
 
         <!-- KPI 4-Tile Grid: Current Turn vs Session Average -->
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
           <div class="bg-[var(--card)] rounded-lg p-1.5 border border-[var(--hud-border)]">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${turnTag}流式速度</div>
+            <div class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml(tHud('kpiTurnSpeed', turnTag))}</div>
             <div class="text-sm font-extrabold mono text-emerald-600 dark:text-emerald-400">${curStreamTps} <span class="text-[10px] font-normal">tok/s</span></div>
-            <div class="text-[10px] text-[var(--muted-foreground)] mono">会话均${avgStreamTps} / 峰${peakStreamTps}</div>
+            <div class="text-[10px] text-[var(--muted-foreground)] mono">${escapeHtml(avgPfx)}${avgStreamTps} / ${escapeHtml(peakPfx)}${peakStreamTps}</div>
           </div>
           <div class="bg-[var(--card)] rounded-lg p-1.5 border border-[var(--hud-border)]">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${turnTag}缓存命中</div>
+            <div class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml(tHud('kpiTurnCache', turnTag))}</div>
             <div class="text-sm font-extrabold mono text-amber-600 dark:text-amber-400">${curCachePct} <span class="text-[10px] font-semibold">(${fmtCacheK(curCacheTok)})</span></div>
-            <div class="text-[10px] text-[var(--muted-foreground)] mono">会话均${avgCachePct} · 累计${fmtCacheK(totalCacheTok)}</div>
+            <div class="text-[10px] text-[var(--muted-foreground)] mono">${escapeHtml(avgPfx)}${avgCachePct} · ${escapeHtml(totPfx)}${fmtCacheK(totalCacheTok)}</div>
           </div>
           <div class="bg-[var(--card)] rounded-lg p-1.5 border border-[var(--hud-border)]">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${turnTag}端到端 E2E</div>
+            <div class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml(tHud('kpiTurnE2e', turnTag))}</div>
             <div class="text-sm font-extrabold mono text-indigo-600 dark:text-indigo-400">${curEffectiveTps} <span class="text-[10px] font-normal">tok/s</span></div>
-            <div class="text-[10px] text-[var(--muted-foreground)] mono">会话均${avgEffTps} / 峰${peakEffTps}</div>
+            <div class="text-[10px] text-[var(--muted-foreground)] mono">${escapeHtml(avgPfx)}${avgEffTps} / ${escapeHtml(peakPfx)}${peakEffTps}</div>
           </div>
           <div class="bg-[var(--card)] rounded-lg p-1.5 border border-[var(--hud-border)]">
-            <div class="text-[11px] text-[var(--muted-foreground)]">${turnTag}Token / 耗时</div>
+            <div class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml(tHud('kpiTurnTokDur', turnTag))}</div>
             <div class="text-sm font-extrabold mono text-indigo-600 dark:text-indigo-300">${curTokensStr} <span class="text-[10px] font-normal text-[var(--muted-foreground)]">tok</span></div>
-            <div class="text-[10px] text-[var(--muted-foreground)] mono">输出${curOutStr} · 耗时${curDurStr}</div>
+            <div class="text-[10px] text-[var(--muted-foreground)] mono">${escapeHtml(outPfx)}${curOutStr} · ${escapeHtml(durPfx)}${curDurStr}</div>
           </div>
         </div>
 
         <!-- Context Size Bar -->
         <div class="bg-[var(--card)] rounded-lg px-2.5 py-1.5 border border-[var(--hud-border)] space-y-1">
           <div class="flex items-center justify-between text-[11px] mono">
-            <span class="text-[var(--muted-foreground)] font-sans">上下文大小</span>
+            <span class="text-[var(--muted-foreground)] font-sans">${escapeHtml(tHud('ctxLabel'))}</span>
             <span class="${getCtxTextColor(ctxPct)} font-semibold">${fmtNum(ctxUsed)} / ${fmtNum(ctxMax)} (${ctxPct}%)</span>
           </div>
           <div class="w-full bg-[var(--background)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)]">
@@ -286,22 +298,22 @@
         <div class="kpi-tile rounded-xl p-2 space-y-1.5 text-xs">
           <div class="flex flex-wrap items-center justify-between gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-bold">🛡 路由与诊断</span>
-              <span class="text-[11px] mono font-semibold px-1.5 py-0.2 rounded border ${diagBadgeCls} whitespace-nowrap">${escapeHtml(diagBadgeText)}</span>
+              <span class="font-bold">${escapeHtml(tHud('diagHeader'))}</span>
+              <span class="text-[11px] mono font-semibold px-2 py-0.5 rounded-md border ${diagBadgeCls} whitespace-nowrap">${escapeHtml(diagBadgeText)}</span>
             </div>
             <span class="text-[10px] mono text-[var(--muted-foreground)]">
-              ${sum.sigKeyHex ? `🔑 0x${sum.sigKeyHex}` : '无签名头'} · Session: ${escapeHtml((latest?.sessionID || '--').slice(0, 10))}
+              ${sum.sigKeyHex ? `🔑 0x${sum.sigKeyHex}` : escapeHtml(tHud('diagNoSig'))} · Session: ${escapeHtml((latest?.sessionID || '--').slice(0, 10))}
             </span>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mono text-[11px]">
             <div class="bg-[var(--card)] rounded px-2 py-1 border border-[var(--hud-border)] truncate">
-              通道: ${escapeHtml(latest?.apiProvider || '--')} · ${latest?.isRouteMismatch ? '<span class="text-rose-500 font-bold">路由偏离</span>' : '<span class="text-emerald-600 dark:text-emerald-400">路由一致</span>'}
+              ${escapeHtml(tHud('diagProvider'))}: ${escapeHtml(latest?.apiProvider || '--')} · ${latest?.isRouteMismatch ? `<span class="text-rose-500 font-bold">${escapeHtml(tHud('diagMismatch'))}</span>` : `<span class="text-emerald-600 dark:text-emerald-400">${escapeHtml(tHud('diagMatch'))}</span>`}
             </div>
             <div class="bg-[var(--card)] rounded px-2 py-1 border border-[var(--hud-border)] truncate">
-              思占比: 末步 ${latest?.thinkingRatioPct ?? 0}% (均 ${sum.avgThinkingRatioPct ?? 0}%)
+              ${escapeHtml(tHud('diagCot'))}: ${escapeHtml(tHud('diagLastStep'))} ${latest?.thinkingRatioPct ?? 0}% (${escapeHtml(tHud('avgShort'))} ${sum.avgThinkingRatioPct ?? 0}%)
             </div>
             <div class="bg-[var(--card)] rounded px-2 py-1 border border-[var(--hud-border)] truncate col-span-2 sm:col-span-1">
-              重试: 末步 ${latest?.retries || 0} / 累计 ${sum.totalRetries || 0}
+              ${escapeHtml(tHud('diagRetry'))}: ${escapeHtml(tHud('diagLastStep'))} ${latest?.retries || 0} / ${escapeHtml(tHud('totalShort'))} ${sum.totalRetries || 0}
             </div>
           </div>
         </div>
@@ -310,7 +322,7 @@
           <div class="space-y-1">
             ${doneBgList.map((bg) => `
               <div class="kpi-tile rounded-lg px-2 py-1 flex items-center justify-between gap-2 text-[11px]">
-                <span class="truncate"><span class="mono font-semibold text-[var(--muted-foreground)]">已完成后台 ${bg.taskId}:</span> ${escapeHtml(bg.toolSummary || bg.commandLine)}</span>
+                <span class="truncate"><span class="mono font-semibold text-[var(--muted-foreground)]">${escapeHtml(tHud('doneBgPrefix'))} ${bg.taskId}:</span> ${escapeHtml(bg.toolSummary || bg.commandLine)}</span>
                 <span class="mono text-[var(--muted-foreground)] shrink-0">${fmtElapsed(bg.elapsedSec)}</span>
               </div>
             `).join('')}
@@ -320,8 +332,8 @@
         <!-- Historical Turn-Task List -->
         <div class="space-y-1.5">
           <div class="flex flex-wrap items-center justify-between gap-1 text-xs text-[var(--muted-foreground)]">
-            <span class="font-semibold text-[var(--foreground)]">📜 历史任务列表（按轮次保存 · 点击单轮可展开 LLM 调用）</span>
-            <span class="mono text-[11px] whitespace-nowrap">共 ${turns.length} 轮 · 累计 ${allTokensStr} tok</span>
+            <span class="font-semibold text-[var(--foreground)]">${escapeHtml(tHud('historyTitle'))}</span>
+            <span class="mono text-[11px] whitespace-nowrap">${escapeHtml(tHud('historyCount', turns.length, allTokensStr))}</span>
           </div>
 
           ${renderTurnSparklineHtml(turns)}
@@ -330,20 +342,20 @@
                class="max-h-72 overflow-y-auto space-y-1.5 pr-0.5">
             ${turns.length === 0 ? `
               <div class="text-xs text-[var(--muted-foreground)] text-center py-4 bg-[var(--card)] rounded-xl border border-[var(--hud-border)]">
-                暂无轮次任务记录
+                ${escapeHtml(tHud('historyEmpty'))}
               </div>
             ` : [...turns].reverse().map((tr) => {
               const isOpen = expandedTurnIds.has(tr.turnId);
               const statusBadge = tr.isRunning
-                ? '<span class="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 font-bold whitespace-nowrap shrink-0">进行中</span>'
+                ? `<span class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 font-bold whitespace-nowrap shrink-0">${escapeHtml(tHud('statusRunning'))}</span>`
                 : tr.status === 'ABORTED'
-                  ? '<span class="px-1.5 py-0.5 rounded bg-rose-500/12 text-rose-500 border border-rose-500/30 whitespace-nowrap shrink-0">已中止</span>'
-                  : '<span class="px-1.5 py-0.5 rounded bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 whitespace-nowrap shrink-0">✓ 完成</span>';
+                  ? `<span class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md bg-rose-500/12 text-rose-500 border border-rose-500/30 whitespace-nowrap shrink-0">${escapeHtml(tHud('statusAborted'))}</span>`
+                  : `<span class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 whitespace-nowrap shrink-0">${escapeHtml(tHud('statusDone'))}</span>`;
               const clock = fmtClockShort(tr.startedAtMs || tr.completedAtMs);
               const cacheSharePct = tr.totalTokens > 0 ? +((tr.cacheReadTokens / tr.totalTokens) * 100).toFixed(1) : 0;
               const turnCtxMax = tr.maxContext || ctxMax || 256000;
               const turnCtxPct = tr.contextUsed > 0 && turnCtxMax > 0 ? +((tr.contextUsed / turnCtxMax) * 100).toFixed(1) : 0;
-              const tokenDetailTip = `未命中输入 ${fmtNum(tr.inputTokens)} + 缓存读取 ${fmtCacheK(tr.cacheReadTokens)} (占总Token ${cacheSharePct}%, 命中率 ${tr.cacheHitRate}%) + 输出 ${fmtNum(tr.outputTokens)} (思${fmtNum(tr.thinkingTokens)}/答${fmtNum(tr.responseTokens)})`;
+              const tokenDetailTip = tHud('turnTokTip', fmtNum(tr.inputTokens), fmtCacheK(tr.cacheReadTokens), cacheSharePct, tr.cacheHitRate, fmtNum(tr.outputTokens), fmtNum(tr.thinkingTokens), fmtNum(tr.responseTokens));
               return `
                 <div class="rounded-xl border ${tr.isRunning ? 'border-sky-500/45 bg-sky-500/5' : 'border-[var(--hud-border)] bg-[var(--card)]'} overflow-hidden">
                   <div onclick="toggleTurnStepsExpand(event, '${escapeHtml(tr.turnId)}')"
@@ -353,35 +365,37 @@
                         <span class="mono font-bold text-[var(--muted-foreground)] shrink-0 whitespace-nowrap">#${tr.turnNumber}</span>
                         ${statusBadge}
                         <span class="font-semibold text-[var(--foreground)] truncate" title="${escapeHtml(tr.promptPreview || '')}">
-                          ${escapeHtml(tr.promptPreview || `轮次 #${tr.turnNumber}`)}
+                          ${escapeHtml(tr.promptPreview || tHud('turnTitleFallback', tr.turnNumber))}
                         </span>
                       </div>
-                      <div class="flex items-center gap-1.5 shrink-0 mono text-[11px] text-[var(--muted-foreground)] whitespace-nowrap">
+                      <div class="flex items-center gap-1.5 shrink-0 mono text-[11px] leading-4 text-[var(--muted-foreground)] whitespace-nowrap">
                         ${clock ? `<span>${clock}</span>` : ''}
-                        <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap">${tr.stepCount || 0}步 ${isOpen ? '▴' : '▾'}</span>
+                        <span class="${PILL_CLS} whitespace-nowrap">${escapeHtml(tHud('stepsUnit', tr.stepCount || 0))} ${isOpen ? '▴' : '▾'}</span>
                       </div>
                     </div>
 
-                    <div class="flex flex-wrap items-center gap-1.5 text-[11px] mono">
-                      <span class="px-1.5 py-0.5 rounded metric-pill text-[var(--foreground)] font-semibold">${escapeHtml(tr.responseModel && tr.responseModel !== 'N/A' ? tr.responseModel : tr.exactModelId)}</span>
-                      <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap">
-                        流式 <strong class="text-emerald-600 dark:text-emerald-400">${tr.streamingTps > 0 ? tr.streamingTps : '--'}</strong> tok/s
+                    <div class="flex flex-wrap items-center gap-1.5 text-[11px] leading-4 mono">
+                      <span class="${PILL_CLS} text-[var(--foreground)] font-semibold">${escapeHtml(tr.responseModel && tr.responseModel !== 'N/A' ? tr.responseModel : tr.exactModelId)}</span>
+                      <span class="${PILL_CLS} whitespace-nowrap">
+                        <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('streamLabel'))}</span>
+                        <strong class="text-emerald-600 dark:text-emerald-400">${tr.streamingTps > 0 ? tr.streamingTps : '--'}</strong>
+                        <span class="text-[var(--muted-foreground)]">tok/s</span>
                       </span>
-                      <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap" title="本轮提示词缓存命中率 ${tr.cacheHitRate}% · 缓存读取 ${fmtCacheK(tr.cacheReadTokens)} · 占本轮总Token ${cacheSharePct}%">
-                        缓存比例 <strong class="text-amber-600 dark:text-amber-400">${tr.stepCount > 0 ? `${tr.cacheHitRate}% (${fmtCacheK(tr.cacheReadTokens)})` : '--%'}</strong>
+                      <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tHud('turnCacheTip', tr.cacheHitRate, fmtCacheK(tr.cacheReadTokens), cacheSharePct))}">
+                        <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('cacheRatioLabel'))}</span>
+                        <strong class="text-amber-600 dark:text-amber-400">${tr.stepCount > 0 ? `${tr.cacheHitRate}% (${fmtCacheK(tr.cacheReadTokens)})` : '--%'}</strong>
                       </span>
                       ${tr.contextUsed > 0 ? `
-                        <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap" title="本轮末步上下文大小 / 上限">
-                          上下文 <strong class="${getCtxTextColor(turnCtxPct)}">${fmtNum(tr.contextUsed)}/${fmtNum(turnCtxMax)}</strong> (${turnCtxPct}%)
+                        <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tHud('turnCtxTip'))}">
+                          <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('ctxShort'))}</span>
+                          <strong class="${getCtxTextColor(turnCtxPct)}">${fmtNum(tr.contextUsed)}/${fmtNum(turnCtxMax)}</strong>
+                          <span class="text-[var(--muted-foreground)]">(${turnCtxPct}%)</span>
                         </span>
                       ` : ''}
-                    </div>
-
-                    <div class="flex flex-wrap items-center justify-between gap-1.5 text-[11px] mono pt-0.5 border-t border-[var(--hud-border)]">
-                      <span class="px-2 py-0.5 rounded-md border border-indigo-500/35 bg-indigo-500/12 text-indigo-700 dark:text-indigo-300 font-bold"
-                            title="${escapeHtml(tokenDetailTip)}">
-                        📊 总 ${fmtNum(tr.totalTokens)} tok
-                        <span class="font-normal opacity-85">(入${fmtNum(tr.inputTokens)} / 缓${fmtCacheK(tr.cacheReadTokens)}·${cacheSharePct}% / 出${fmtNum(tr.outputTokens)})</span>
+                      <span class="${PILL_CLS}" title="${escapeHtml(tokenDetailTip)}">
+                        <span class="text-[var(--muted-foreground)]">📊 ${escapeHtml(totPfx)}</span>
+                        <strong class="text-indigo-600 dark:text-indigo-400">${fmtNum(tr.totalTokens)} tok</strong>
+                        <span class="text-[var(--muted-foreground)]">(${escapeHtml(inTag)}${fmtNum(tr.inputTokens)} / ${escapeHtml(cacheTag)}${fmtCacheK(tr.cacheReadTokens)}·${cacheSharePct}% / ${escapeHtml(outTag)}${fmtNum(tr.outputTokens)})</span>
                       </span>
                       ${fmtQuotaUsageBadges(tr.quotaUsage, tr.isRunning)}
                     </div>
