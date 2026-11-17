@@ -1,0 +1,12 @@
+{
+  "name": "agy-telemetry",
+  "displayName": "Antigravity Telemetry — Model, Speed & Quota Monitor",
+  "version": "1.1.0",
+  "description": "Real-time sidecar HUD for Google Antigravity IDE & Codex: inspect actual routed models, Streaming & E2E Token/s (TPS), TTFT latency, KV cache hit size/rate, per-turn token & 5h/weekly quota tracking, and background task control.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "打开实时模型、速度与配额监控面板 (Open Telemetry HUD)",
+    "查看当前任务与历史轮次的 Token/s、缓存和配额消耗",
+    "分析当前会话的 TTFT 延迟与模型路由一致性"
+  ]
+}

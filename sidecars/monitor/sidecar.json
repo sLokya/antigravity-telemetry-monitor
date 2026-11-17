@@ -1,0 +1,23 @@
+{
+  "command": "node",
+  "args": ["server.mjs"],
+  "restart_policy": "always",
+  "has_web_ui": true,
+  "display_name": "Telemetry & Speed HUD",
+  "description": "Real-time routed model name, Token/s (TPS) generation speed, TTFT latency, and context cache monitor.",
+  "ui_config": {
+    "display_name": "Telemetry & Speed HUD",
+    "views": [
+      {
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "path": "/",
+        "title": "Telemetry HUD"
+      },
+      {
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_SIDEBAR",
+        "path": "/?view=sidebar",
+        "title": "Telemetry HUD"
+      }
+    ]
+  }
+}

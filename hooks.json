@@ -1,0 +1,38 @@
+{
+  "telemetry-tracker": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node ./sidecars/monitor/hook_tracker.mjs PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "node ./sidecars/monitor/hook_tracker.mjs PostInvocation",
+        "timeout": 5
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./sidecars/monitor/hook_tracker.mjs PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node ./sidecars/monitor/hook_tracker.mjs Stop",
+        "timeout": 5
+      }
+    ]
+  }
+}

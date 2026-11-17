@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Antigravity Fleet & Speed Telemetry HUD</title>
+  <script src="/preload.js"></script>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --hud-surface: color-mix(in srgb, var(--card, #ffffff) 92%, var(--background, #f8fafc) 8%);
+      --hud-subtle: color-mix(in srgb, var(--background, #f1f5f9) 70%, var(--card, #ffffff) 30%);
+      --hud-border: color-mix(in srgb, var(--border, #e2e8f0) 85%, #64748b 15%);
+    }
+    body {
+      background: var(--background, #f8fafc);
+      color: var(--foreground, #0f172a);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.38; transform: scale(0.88); }
+    }
+    @keyframes shimmer-bar {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    .pulse-live {
+      animation: pulse-dot 1.4s infinite ease-in-out;
+    }
+    .accent-header-bar {
+      background: linear-gradient(90deg, #0ea5e9 0%, #6366f1 50%, #8b5cf6 100%);
+      background-size: 200% 100%;
+      animation: shimmer-bar 6s linear infinite;
+    }
+    .hud-card {
+      background: var(--card, #ffffff);
+      border: 1px solid var(--hud-border);
+      box-shadow: 0 2px 10px -2px rgba(15, 23, 42, 0.06), 0 1px 3px -1px rgba(15, 23, 42, 0.04);
+    }
+    .kpi-tile {
+      background: var(--hud-subtle);
+      border: 1px solid var(--hud-border);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .task-card {
+      background: var(--card, #ffffff);
+      border: 1px solid var(--hud-border);
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+      transition: all 0.16s ease;
+    }
+    .task-card:hover {
+      box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.09);
+      transform: translateY(-1px);
+    }
+    .task-card-running {
+      border-color: rgba(14, 165, 233, 0.45);
+      background: linear-gradient(90deg, rgba(14, 165, 233, 0.05) 0%, var(--card, #ffffff) 28%);
+    }
+    .task-card-bg {
+      border-color: rgba(139, 92, 246, 0.48);
+      background: linear-gradient(90deg, rgba(139, 92, 246, 0.06) 0%, var(--card, #ffffff) 32%);
+    }
+    .metric-pill {
+      background: var(--hud-subtle);
+      border: 1px solid var(--hud-border);
+    }
+    .bg-task-tray {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.07) 0%, rgba(14, 165, 233, 0.04) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.28);
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    .quota-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    .quota-clock {
+      display: none;
+    }
+    @media (min-width: 560px) {
+      .quota-clock {
+        display: inline;
+      }
+    }
+    @media (max-width: 499px) {
+      .kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.375rem;
+      }
+      .kpi-grid > .kpi-span-wide {
+        grid-column: span 2;
+      }
+      .quota-grid {
+        gap: 0.375rem;
+      }
+    }
+    @media (max-width: 359px) {
+      .quota-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    @media (max-width: 339px) {
+      .kpi-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .kpi-grid > .kpi-span-wide {
+        grid-column: span 1;
+      }
+    }
+  </style>
+</head>
+<body class="p-2 sm:p-2.5 select-none antialiased">
+  <div class="max-w-4xl mx-auto space-y-2 sm:space-y-2.5">
+
+    <!-- Toast Feedback Banner -->
+    <div id="actionToast" class="hidden text-xs mono px-3 py-2 rounded-xl border shadow-sm flex items-center justify-between transition-all">
+      <span id="actionToastText" class="font-medium">--</span>
+      <button onclick="document.getElementById('actionToast').classList.add('hidden')" class="text-xs opacity-70 hover:opacity-100 px-1">✕</button>
+    </div>
+
+    <!-- 1. GLOBAL FLEET OVERVIEW CARD -->
+    <div class="hud-card rounded-2xl overflow-hidden">
+      <!-- Top Shimmer Accent Line -->
+      <div class="h-1 w-full accent-header-bar"></div>
+
+      <div class="p-2 sm:p-3 space-y-2 sm:space-y-2.5">
+        <!-- Header Bar -->
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+            <div class="flex items-center gap-1.5">
+              <span id="fleetDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-live shrink-0 ring-4 ring-emerald-500/15"></span>
+              <span class="text-sm font-extrabold tracking-tight whitespace-nowrap">并行任务监控台</span>
+            </div>
+            <span id="fleetRunningBadge" class="text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 font-semibold whitespace-nowrap">
+              0 前台推理
+            </span>
+            <span id="fleetCodexBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/35 font-semibold whitespace-nowrap">
+              🟢 0 Codex
+            </span>
+            <span id="fleetBgBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-300 border border-violet-500/35 font-semibold whitespace-nowrap">
+              ⚙️ 0 后台任务
+            </span>
+          </div>
+
+          <!-- Segmented Filter Pill (Default: 活跃/后台 first!) + Utilities -->
+          <div class="flex flex-wrap items-center gap-1.5 max-w-full">
+            <div class="inline-flex flex-wrap items-center p-0.5 rounded-lg bg-[var(--background)] border border-[var(--hud-border)] max-w-full">
+              <button id="filterRunBtn" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap">
+                最近活跃 <span id="filterRunCount" class="mono opacity-90">(0)</span>
+              </button>
+              <button id="filterCodexBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
+                🟢 Codex <span id="filterCodexCount" class="mono opacity-75">(0)</span>
+              </button>
+              <button id="filterAllBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
+                全部 <span id="filterAllCount" class="mono opacity-75">(0)</span>
+              </button>
+            </div>
+            <div class="inline-flex items-center gap-1.5">
+              <button id="fpLedgerBtn" onclick="toggleFpLedgerDrawer()" title="查看本地 Thinking 签名协议头档案（仅监测厂商签名格式/密钥版本，同系模型共用）" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <span>🔑</span> <span id="fpLedgerBtnLabel">签名头</span>
+              </button>
+              <button id="refreshBtn" title="立即刷新监控数据" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <span>↻</span> <span>刷新</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fingerprint Change Alert Banner (Auto-surfaces when a model signature key changes!) -->
+        <div id="fpAlertBanner" class="hidden rounded-xl border border-rose-500/50 bg-rose-500/12 px-3 py-2 text-xs"></div>
+
+        <!-- Collapsible Local Fingerprint Baseline & Change Ledger Drawer -->
+        <div id="fpLedgerDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-indigo-500/35"></div>
+
+        <!-- Bento KPI Grid: 3 Core Runtime Tiles -->
+        <div class="kpi-grid">
+          <!-- Tile 1: Active / Background Tasks -->
+          <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
+            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
+              <span class="truncate whitespace-nowrap">运行态<span class="hidden sm:inline"> (前台 / 后台)</span></span>
+              <span class="w-5 h-5 rounded-md bg-sky-500/10 text-sky-500 flex items-center justify-center text-xs font-bold shrink-0">⚡</span>
+            </div>
+            <div id="kpiTasks" class="text-sm sm:text-base font-extrabold mono mt-1 tracking-tight whitespace-nowrap truncate">-- 前台 / -- 后台</div>
+            <div id="kpiTasksSub" class="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">实时探测中</div>
+          </div>
+
+          <!-- Tile 2: Effective Fleet TPS -->
+          <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
+            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
+              <span class="truncate whitespace-nowrap">实时<span class="hidden sm:inline">生成</span>速度</span>
+              <span class="w-5 h-5 rounded-md bg-emerald-500/10 text-emerald-500 flex items-center justify-center text-xs font-bold shrink-0">🚀</span>
+            </div>
+            <div class="flex items-baseline gap-1 mt-1 whitespace-nowrap">
+              <span id="kpiFleetTps" class="text-sm sm:text-base font-extrabold mono text-emerald-600 dark:text-emerald-400">--</span>
+              <span class="text-[11px] mono text-[var(--muted-foreground)]">tok/s</span>
+            </div>
+            <div id="kpiFleetTpsSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">并行合流吞吐</div>
+          </div>
+
+          <!-- Tile 3: Peak Context Watermark -->
+          <div class="kpi-tile kpi-span-wide rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
+            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
+              <span class="truncate whitespace-nowrap">最高<span class="hidden sm:inline">上下文</span>水位</span>
+              <span class="w-5 h-5 rounded-md bg-amber-500/10 text-amber-500 flex items-center justify-center text-xs font-bold shrink-0">📊</span>
+            </div>
+            <div id="kpiMaxCtx" class="text-sm sm:text-base font-extrabold mono text-amber-600 dark:text-amber-400 mt-1 truncate">--%</div>
+            <div class="w-full bg-[var(--card)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)] mt-1">
+              <div id="kpiMaxCtxBar" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quota Progress Bars Row: 5h Quota & Weekly Quota (Gemini + Claude + Codex) -->
+        <div class="quota-grid">
+          <!-- 5-Hour Quota Card -->
+          <div class="kpi-tile rounded-xl px-2.5 py-2 space-y-1.5 min-w-0">
+            <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
+                <span class="text-xs font-bold text-[var(--foreground)] truncate">5小时配额</span>
+              </div>
+              <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">5h</span>
+            </div>
+            <div id="quota5hPoolsList" class="space-y-1.5 text-xs mono">
+              <div class="text-[11px] text-[var(--muted-foreground)]">正在读取配额池...</div>
+            </div>
+          </div>
+
+          <!-- Weekly Quota Card -->
+          <div class="kpi-tile rounded-xl px-2.5 py-2 space-y-1.5 min-w-0">
+            <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="w-2 h-2 rounded-full bg-indigo-500 shrink-0"></span>
+                <span class="text-xs font-bold text-[var(--foreground)] truncate">周窗口配额</span>
+              </div>
+              <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">7d</span>
+            </div>
+            <div id="quotaWeeklyPoolsList" class="space-y-1.5 text-xs mono">
+              <div class="text-[11px] text-[var(--muted-foreground)]">正在读取配额池...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Conversation & Background Task Cards Container -->
+        <div id="fleetTasksContainer" class="space-y-2 pt-0.5">
+          <div class="text-xs text-[var(--muted-foreground)] text-center py-4">正在扫描活跃任务与后台进程...</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const refreshBtn = document.getElementById('refreshBtn');
+    const filterAllBtn = document.getElementById('filterAllBtn');
+    const filterRunBtn = document.getElementById('filterRunBtn');
+    const filterCodexBtn = document.getElementById('filterCodexBtn');
+
+    // Default to Active/Background view ("首先默认看活跃"): 'active' | 'codex' | 'all'
+    window.selectedConvId = null;
+    window.currentFilterMode = 'active';
+    window.lastPayload = null;
+
+    // Track open background log drawers: key = `${convId}:${stepIndex}` -> log string
+    window.openBgLogs = new Map();
+    const openBgLogs = window.openBgLogs;
+    // Track open Codex progress timeline drawers: Set of convId
+    const openCodexTimelines = new Set();
+
+    function updateFilterButtonsUI() {
+      const activeCls = 'text-xs px-2.5 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition';
+      const codexActiveCls = 'text-xs px-2.5 py-1 rounded-md bg-emerald-600 text-white font-semibold shadow-sm transition';
+      const inactiveCls = 'text-xs px-2.5 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition';
+      filterRunBtn.className = window.currentFilterMode === 'active' ? activeCls : inactiveCls;
+      if (filterCodexBtn) {
+        filterCodexBtn.className = window.currentFilterMode === 'codex' ? codexActiveCls : inactiveCls;
+      }
+      filterAllBtn.className = window.currentFilterMode === 'all' ? activeCls : inactiveCls;
+    }
+
+    function showToast(msg, isError = false) {
+      const toast = document.getElementById('actionToast');
+      const text = document.getElementById('actionToastText');
+      text.textContent = msg;
+      toast.className = isError
+        ? 'text-xs mono px-3 py-2 rounded-xl border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-between shadow-sm'
+        : 'text-xs mono px-3 py-2 rounded-xl border border-sky-500/40 bg-sky-500/15 text-sky-600 dark:text-sky-400 flex items-center justify-between shadow-sm';
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 3500);
+    }
+
+    function reloadWithCacheBust(ver) {
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.set('_v', ver ? String(ver) : String(Date.now()));
+        window.location.replace(u.toString());
+      } catch {
+        window.location.reload();
+      }
+    }
+
+    refreshBtn.addEventListener('click', () => reloadWithCacheBust());
+
+    filterAllBtn.addEventListener('click', () => {
+      window.currentFilterMode = 'all';
+      updateFilterButtonsUI();
+      if (window.lastPayload) renderFleet(window.lastPayload);
+    });
+
+    if (filterCodexBtn) {
+      filterCodexBtn.addEventListener('click', () => {
+        window.currentFilterMode = 'codex';
+        updateFilterButtonsUI();
+        if (window.lastPayload) renderFleet(window.lastPayload);
+      });
+    }
+
+    filterRunBtn.addEventListener('click', () => {
+      window.currentFilterMode = 'active';
+      updateFilterButtonsUI();
+      if (window.lastPayload) renderFleet(window.lastPayload);
+    });
+
+    window.switchToAllFilter = function() {
+      window.currentFilterMode = 'all';
+      updateFilterButtonsUI();
+      if (window.lastPayload) renderFleet(window.lastPayload);
+    };
+
+    window.switchToCodexFilter = function() {
+      window.currentFilterMode = 'codex';
+      updateFilterButtonsUI();
+      if (window.lastPayload) renderFleet(window.lastPayload);
+    };
+
+    window.selectTaskForDrilldown = function(convId) {
+      if (window.selectedConvId === convId) {
+        window.selectedConvId = null;
+        if (window.lastPayload) renderFleet(window.lastPayload);
+        return;
+      }
+      window.selectedConvId = convId;
+      if (window.lastPayload) renderFleet(window.lastPayload);
+      fetchTelemetry();
+    };
+
+    window.jumpToConversation = async function(event, convId) {
+      event.stopPropagation();
+      if (String(convId).startsWith('codex:')) {
+        try {
+          const res = await callActionApi({
+            action: 'open_codex_thread',
+            threadId: String(convId).replace(/^codex:/, ''),
+          });
+          showToast(res.ok ? res.message : `跳转 Codex 失败: ${res.error}`, !res.ok);
+        } catch (err) {
+          showToast(`跳转 Codex 异常: ${err.message}`, true);
+        }
+        return;
+      }
+      if (window.sidecar?.ui?.toggleConversation) {
+        window.sidecar.ui.toggleConversation(convId);
+      }
+    };
+
+    window.toggleCodexTimeline = function(event, convId) {
+      event.stopPropagation();
+      if (openCodexTimelines.has(convId)) {
+        openCodexTimelines.delete(convId);
+      } else {
+        openCodexTimelines.add(convId);
+      }
+      if (lastPayload) renderFleet(lastPayload);
+    };
+
+    window.stopCodexTurn = async function(event, threadId) {
+      event.stopPropagation();
+      const btn = event.currentTarget;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '停止中...';
+      }
+      try {
+        const res = await callActionApi({ action: 'stop_codex_turn', threadId });
+        showToast(res.ok ? res.message : `停止失败: ${res.error}`, !res.ok);
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`停止异常: ${err.message}`, true);
+      }
+    };
+
+    async function callActionApi(payload) {
+      const fetcher = window.sidecar?.fetch || fetch;
+      const res = await fetcher('/api/action', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return res.json();
+    }
+
+    // Stop specific background task(s) (task-XX) instead of stopping the conversation turn itself
+    window.killBgTask = async function(event, convId, stepIndexOrArray) {
+      event.stopPropagation();
+      const btn = event.currentTarget;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '正在停止...';
+      }
+      try {
+        const payload = Array.isArray(stepIndexOrArray)
+          ? { action: 'kill_bg_task', conversationId: convId, stepIndices: stepIndexOrArray }
+          : { action: 'kill_bg_task', conversationId: convId, stepIndex: stepIndexOrArray };
+        const res = await callActionApi(payload);
+        showToast(res.ok ? res.message : `停止失败: ${res.error}`, !res.ok);
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`请求异常: ${err.message}`, true);
+      }
+    };
+
+    window.toggleBgLog = async function(event, convId, stepIndex, forceRefresh = false) {
+      event.stopPropagation();
+      const key = `${convId}:${stepIndex}`;
+      if (openBgLogs.has(key) && !forceRefresh) {
+        openBgLogs.delete(key);
+        if (lastPayload) renderFleet(lastPayload);
+        return;
+      }
+      openBgLogs.set(key, '正在读取日志...');
+      if (lastPayload) renderFleet(lastPayload);
+      try {
+        const res = await callActionApi({
+          action: 'tail_bg_log',
+          conversationId: convId,
+          stepIndex,
+        });
+        openBgLogs.set(key, res.ok ? res.log : `读取失败: ${res.error}`);
+        if (lastPayload) renderFleet(lastPayload);
+      } catch (err) {
+        openBgLogs.set(key, `读取异常: ${err.message}`);
+        if (lastPayload) renderFleet(lastPayload);
+      }
+    };
+
+    window.copyBgCmd = function(event, encodedCmd) {
+      event.stopPropagation();
+      const cmd = decodeURIComponent(encodedCmd || '');
+      if (!cmd) return;
+      navigator.clipboard?.writeText(cmd);
+      showToast(`已复制命令: ${cmd.slice(0, 50)}${cmd.length > 50 ? '...' : ''}`);
+    };
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function fmtNum(n) {
+      if (n === null || n === undefined || isNaN(n)) return '--';
+      if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+      return String(n);
+    }
+
+    function fmtCacheK(n) {
+      if (n === null || n === undefined || isNaN(n)) return '--k';
+      if (n === 0) return '0k';
+      return (n / 1000).toFixed(1) + 'k';
+    }
+
+    function fmtAgo(mtimeMs) {
+      if (!mtimeMs) return '';
+      const sec = Math.max(0, Math.floor((Date.now() - mtimeMs) / 1000));
+      if (sec < 5) return '刚刚';
+      if (sec < 60) return `${sec}s`;
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}m`;
+      return `${Math.floor(min / 60)}h`;
+    }
+
+    function fmtElapsed(sec) {
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      const remS = s % 60;
+      if (m < 60) return `${m}m ${remS}s`;
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      return `${h}h ${remM}m`;
+    }
+
+    function fmtResetCountdown(diffMs) {
+      if (diffMs <= 0) return '即将刷新';
+      const totalMins = Math.ceil(diffMs / 60000);
+      if (totalMins < 60) return `${totalMins}m`;
+      const totalHours = Math.floor(totalMins / 60);
+      const remMins = totalMins % 60;
+      if (totalHours < 24) return remMins > 0 ? `${totalHours}h${remMins}m` : `${totalHours}h`;
+      const days = Math.floor(totalHours / 24);
+      const remHours = totalHours % 24;
+      return remHours > 0 ? `${days}d${remHours}h` : `${days}d`;
+    }
+
+    function fmtResetClock(iso) {
+      if (!iso) return '';
+      const dt = new Date(iso);
+      if (isNaN(dt.getTime())) return '';
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const hhmm = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+      const isSameDay =
+        dt.getFullYear() === now.getFullYear() &&
+        dt.getMonth() === now.getMonth() &&
+        dt.getDate() === now.getDate();
+      if (isSameDay) return hhmm;
+      return `${pad(dt.getMonth() + 1)}/${pad(dt.getDate())} ${hhmm}`;
+    }
+
+    function fmtResetFull(iso) {
+      if (!iso) return '刷新时间: --';
+      const diffMs = new Date(iso).getTime() - Date.now();
+      if (diffMs <= 0) return '即将刷新';
+      const clock = fmtResetClock(iso);
+      const cd = fmtResetCountdown(diffMs);
+      return `${clock} 刷新 (剩 ${cd})`;
+    }
+
+    function fmtResetTime(iso) {
+      if (!iso) return '';
+      const diffMs = new Date(iso).getTime() - Date.now();
+      if (diffMs <= 0) return '(即将刷新)';
+      const clock = fmtResetClock(iso);
+      const cd = fmtResetCountdown(diffMs);
+      return `(${clock} · ${cd})`;
+    }
+
+    function getStateStyle(stateCode, hasRunningBg = false) {
+      if (stateCode === 'BG_RUNNING') {
+        return {
+          dot: 'bg-violet-500 pulse-live',
+          badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/35',
+          cardClass: 'task-card-bg',
+          accentBar: 'bg-violet-500',
+        };
+      }
+      if (stateCode === 'THINKING') {
+        return {
+          dot: 'bg-amber-500 pulse-live',
+          badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/35',
+          cardClass: 'task-card-running',
+          accentBar: 'bg-amber-500',
+        };
+      }
+      if (stateCode === 'TOOL_RUNNING' || stateCode === 'RUNNING') {
+        return {
+          dot: 'bg-sky-500 pulse-live',
+          badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/35',
+          cardClass: 'task-card-running',
+          accentBar: 'bg-sky-500',
+        };
+      }
+      if (hasRunningBg) {
+        return {
+          dot: 'bg-violet-500 pulse-live',
+          badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/35',
+          cardClass: 'task-card-bg',
+          accentBar: 'bg-violet-500',
+        };
+      }
+      return {
+        dot: 'bg-emerald-500',
+        badge: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/25',
+        cardClass: '',
+        accentBar: 'bg-emerald-500/60',
+      };
+    }
+
+    function getCtxColor(pct) {
+      if (pct >= 80) return 'bg-rose-500';
+      if (pct >= 60) return 'bg-amber-500';
+      return 'bg-emerald-500';
+    }
+
+    function getCtxTextColor(pct) {
+      if (pct >= 80) return 'text-rose-600 dark:text-rose-400 font-bold';
+      if (pct >= 60) return 'text-amber-600 dark:text-amber-400 font-semibold';
+      return 'text-[var(--muted-foreground)]';
+    }
+
+    let isFetchingTelemetry = false;
+    async function fetchTelemetry() {
+      if (isFetchingTelemetry) return;
+      isFetchingTelemetry = true;
+      try {
+        const fetcher = window.sidecar?.fetch || fetch;
+        const res = await fetcher('/api/telemetry', {
+          method: 'POST',
+          body: JSON.stringify({ conversationId: window.selectedConvId || 'auto' })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.uiVersion) {
+          const prevVer = sessionStorage.getItem('agy_hud_ui_ver');
+          sessionStorage.setItem('agy_hud_ui_ver', String(data.uiVersion));
+          if (prevVer && prevVer !== String(data.uiVersion)) {
+            reloadWithCacheBust(data.uiVersion);
+            return;
+          }
+        }
+        window.lastPayload = data;
+        renderFingerprintLedger(data);
+        renderFleet(data);
+      } catch (err) {
+        console.error('Telemetry fetch error:', err);
+        const container = document.getElementById('fleetTasksContainer');
+        if (container && !window.lastPayload) {
+          container.innerHTML = `<div class="text-xs text-rose-500 text-center py-4">监控数据加载/渲染异常: ${escapeHtml(err?.message || err)}</div>`;
+        }
+      } finally {
+        isFetchingTelemetry = false;
+      }
+    }
+
+    let fpLedgerDrawerOpen = false;
+    function toggleFpLedgerDrawer() {
+      fpLedgerDrawerOpen = !fpLedgerDrawerOpen;
+      const drawer = document.getElementById('fpLedgerDrawer');
+      if (fpLedgerDrawerOpen) {
+        drawer.classList.remove('hidden');
+        if (lastPayload) renderFingerprintLedger(lastPayload);
+      } else {
+        drawer.classList.add('hidden');
+      }
+    }
+
+    async function ackFingerprintChange(modelFamily = '') {
+      try {
+        const data = await callActionApi({ action: 'ack_fingerprint', modelFamily });
+        showToast(data.message || '已更新指纹基线', !data.ok);
+        await fetchTelemetry();
+      } catch (err) {
+        showToast('更新指纹基线失败: ' + err, true);
+      }
+    }
+
+    function renderFingerprintLedger(data) {
+      const ledger = data.fingerprintLedger || { baselines: [], events: [], unackedCount: 0 };
+      const baselines = ledger.baselines || [];
+      const events = ledger.events || [];
+      const changedBaselines = baselines.filter(b => b.status === 'CHANGED');
+
+      // Update header button label
+      const btnLabel = document.getElementById('fpLedgerBtnLabel');
+      const btn = document.getElementById('fpLedgerBtn');
+      if (changedBaselines.length > 0 || ledger.unackedCount > 0) {
+        btnLabel.textContent = `签名头变更 (${changedBaselines.length || ledger.unackedCount})`;
+        btn.className = 'text-xs px-2.5 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold transition flex items-center gap-1';
+      } else {
+        btnLabel.textContent = `签名头 (${baselines.length})`;
+        btn.className = 'text-xs px-2.5 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1';
+      }
+
+      // Render auto-alert banner when signature header changes
+      const banner = document.getElementById('fpAlertBanner');
+      if (changedBaselines.length > 0) {
+        banner.classList.remove('hidden');
+        banner.innerHTML = changedBaselines.map(b => `
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm">🔑</span>
+              <span class="font-bold text-amber-600 dark:text-amber-400">Thinking 签名协议头变化:</span>
+              <span class="mono font-bold text-[var(--foreground)]">${escapeHtml(b.modelFamily)}</span>
+              <span class="mono text-[11px] text-[var(--muted-foreground)]">
+                原头 <code class="px-1 py-0.5 rounded bg-[var(--card)] border border-[var(--hud-border)]">0x${escapeHtml(b.baselineKeyHex)}</code>
+                → 当前 <code class="px-1 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/40 font-bold">0x${escapeHtml(b.latestKeyHex)}</code>
+              </span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="ackFingerprintChange('${escapeHtml(b.modelFamily)}')"
+                      class="px-2.5 py-0.5 rounded-md bg-amber-600 text-white hover:bg-amber-500 font-semibold text-[11px] transition shadow-sm">
+                ✓ 确认并更新基线
+              </button>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+      }
+
+      // Render collapsible ledger drawer
+      const drawer = document.getElementById('fpLedgerDrawer');
+      if (!fpLedgerDrawerOpen) return;
+
+      drawer.innerHTML = `
+        <div class="flex items-center justify-between border-b border-[var(--hud-border)] pb-1.5">
+          <div class="flex items-center gap-1.5 text-xs font-bold flex-wrap">
+            <span>🔑 Thinking 签名协议头档案</span>
+            <span class="text-[11px] font-normal text-[var(--muted-foreground)]">(仅监测厂商签名格式/密钥轮换；同系 Gemini 共用前缀 0x0169147d13，无法区分具体型号或是否降智)</span>
+          </div>
+          <button onclick="toggleFpLedgerDrawer()" class="text-[11px] px-2 py-0.5 rounded border border-[var(--hud-border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+            收起 ✕
+          </button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          ${baselines.length === 0 ? `<div class="text-xs text-[var(--muted-foreground)] py-1">暂无已记录的签名头档案</div>` : baselines.map(b => {
+            const isChanged = b.status === 'CHANGED';
+            const statusHtml = isChanged
+              ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35 text-[10px] font-bold">⚠ 协议头变化</span>`
+              : `<span class="px-1.5 py-0.5 rounded bg-slate-500/12 text-[var(--muted-foreground)] border border-[var(--hud-border)] text-[10px] font-medium">协议头未变</span>`;
+            return `
+              <div class="bg-[var(--card)] border border-[var(--hud-border)] rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs mono">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <strong class="text-sky-600 dark:text-sky-400 truncate">${escapeHtml(b.modelFamily)}</strong>
+                    ${statusHtml}
+                  </div>
+                  <div class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+                    Key: <strong class="text-indigo-600 dark:text-indigo-400">0x${escapeHtml(b.latestKeyHex)}</strong>
+                    ${isChanged ? `(原 0x${escapeHtml(b.baselineKeyHex)})` : ''} · 通道: ${escapeHtml(b.apiProvider)}
+                  </div>
+                </div>
+                <div class="text-right text-[10px] text-[var(--muted-foreground)] shrink-0">
+                  <div>核验 ${fmtNum(b.verifiedCount || 1)} 次</div>
+                  <div>最近 ${fmtAgo(b.lastSeenMs)}</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        ${events.length > 0 ? `
+          <div class="pt-1 border-t border-[var(--hud-border)]/60 space-y-1">
+            <div class="text-[11px] font-semibold text-[var(--muted-foreground)]">最近指纹记录与异动日志:</div>
+            <div class="max-h-24 overflow-y-auto space-y-1 text-[11px] mono">
+              ${events.slice(0, 6).map(e => {
+                const tag = e.type === 'KEY_CHANGED'
+                  ? `<span class="text-rose-500 font-bold">[密钥变更]</span> 0x${escapeHtml(e.prevKeyHex)} → 0x${escapeHtml(e.newKeyHex)}`
+                  : `<span class="text-emerald-600 dark:text-emerald-400">[建立基线]</span> 0x${escapeHtml(e.newKeyHex)}`;
+                return `<div class="flex items-center justify-between text-[var(--muted-foreground)]">
+                  <span class="truncate">${tag} · ${escapeHtml(e.modelFamily)} (${escapeHtml(e.conversationTitle || '')})</span>
+                  <span class="shrink-0 ml-2">${fmtAgo(e.timestampMs)}</span>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+      `;
+    }
+
+    function getDiagTagStyle(diag) {
+      if (!diag) return { cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold', label: '✓ 正常', detail: '' };
+      if (diag.level === 'ALERT') {
+        return {
+          cls: 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/40 font-bold pulse-live',
+          label: diag.label,
+          detail: diag.detail || '',
+        };
+      }
+      if (diag.level === 'WARN') {
+        return {
+          cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/40 font-bold',
+          label: diag.label,
+          detail: diag.detail || '',
+        };
+      }
+      if (diag.level === 'INFO') {
+        return {
+          cls: 'bg-amber-500/10 text-amber-600/90 dark:text-amber-400/90 border-amber-500/25 font-medium',
+          label: diag.label,
+          detail: diag.detail || '',
+        };
+      }
+      return {
+        cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold',
+        label: diag.label || '✓ 正常',
+        detail: diag.detail || '',
+      };
+    }
+
+    function renderCodexProgressTray(convId, cp, isLinkedFromAgy = false, linkedMeta = null) {
+      if (!cp) return '';
+      const isTimelineOpen = openCodexTimelines.has(convId);
+      const actions = cp.recentActions || [];
+      const hasContent = cp.isRunning || cp.latestCommentary || cp.currentAction || actions.length > 0;
+      if (!hasContent) return '';
+
+      // When IDLE and not expanded, show a compact wrapping summary bar so text is never crushed
+      if (!cp.isRunning && !isTimelineOpen) {
+        const summaryText = cp.latestCommentary || cp.currentAction || `已完成 ${cp.stepCount || 1} 步执行`;
+        return `
+          <div class="mt-1.5 pt-1.5 border-t border-[var(--hud-border)]/70 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px]"
+               onclick="event.stopPropagation()">
+            <div class="flex items-center gap-1.5 min-w-[160px] flex-1 text-[var(--muted-foreground)]">
+              <span class="px-1.5 py-0.2 rounded bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 mono font-semibold shrink-0">
+                ${isLinkedFromAgy ? `✅ Codex 协同已完成 (${escapeHtml(linkedMeta?.exactModelId || 'Codex')})` : `✅ 第 ${cp.turnNumber || 1} 轮已完成 · ${cp.stepCount || 0} 步 (${cp.cmdCount || 0} 命令 / ${cp.fileChangeCount || 0} 改文件)`}
+              </span>
+              <span class="truncate text-[var(--foreground)]/90" title="${escapeHtml(summaryText)}">
+                💬 ${escapeHtml(summaryText)}
+              </span>
+            </div>
+            <div class="flex items-center gap-1 shrink-0 mono ml-auto">
+              ${cp.elapsedSec > 0 ? `<span class="px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--muted-foreground)]">耗时 ${fmtElapsed(cp.elapsedSec)}</span>` : ''}
+              ${actions.length > 0 ? `
+                <button onclick="toggleCodexTimeline(event, '${convId}')"
+                        class="px-2 py-0.5 rounded border border-[var(--hud-border)] bg-[var(--card)] hover:border-emerald-500/50 hover:text-emerald-600 font-sans font-medium transition">
+                  📜 过程 (${actions.length})
+                </button>
+              ` : ''}
+              ${isLinkedFromAgy && linkedMeta?.conversationId ? `
+                <button onclick="jumpToConversation(event, '${linkedMeta.conversationId}')"
+                        class="px-2 py-0.5 rounded border border-emerald-500/35 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-sans font-semibold transition">
+                  Codex ↗
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }
+
+      // Active running Codex turn OR expanded timeline drawer
+      return `
+        <div class="mt-2 pt-2 border-t border-[var(--hud-border)]/80" onclick="event.stopPropagation()">
+          <div class="rounded-xl px-3 py-2.5 space-y-2 border ${cp.isRunning ? 'border-emerald-500/45 bg-emerald-500/8' : 'border-[var(--hud-border)] bg-[var(--background)]/75'}">
+            <!-- Header Row: Left Title & Stats Wrap Cleanly, Right Controls Never Overlap -->
+            <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs">
+              <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                <span class="w-2 h-2 rounded-full ${cp.isRunning ? 'bg-emerald-500 pulse-live' : 'bg-emerald-500'} shrink-0"></span>
+                <span class="font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                  ${cp.isRunning
+                    ? (isLinkedFromAgy ? `🟢 Codex 协同运行中 (${escapeHtml(linkedMeta?.exactModelId || '')})` : '🟢 Codex 实时工作进度')
+                    : (isLinkedFromAgy ? `✅ Codex 协同已完成 (${escapeHtml(linkedMeta?.exactModelId || '')})` : '✅ Codex 回合已完成')}
+                </span>
+                <span class="mono text-[11px] px-2 py-0.5 rounded-md border border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 whitespace-nowrap font-medium">
+                  第 ${cp.turnNumber || 1} 轮 · ${cp.isRunning ? '已执行' : '共执行'} ${cp.stepCount || 0} 步 (${cp.cmdCount || 0} 命令 / ${cp.fileChangeCount || 0} 改文件)
+                </span>
+              </div>
+
+              <div class="flex items-center gap-1.5 shrink-0 mono ml-auto">
+                <span class="${cp.isRunning ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/12 border-emerald-500/25' : 'text-[var(--muted-foreground)] bg-[var(--muted)] border-[var(--hud-border)]'} font-bold text-[11px] px-2 py-0.5 rounded-md border whitespace-nowrap">
+                  ${cp.isRunning ? `⏱ 运行中 ${fmtElapsed(cp.elapsedSec)}` : `✅ 已完成 · 耗时 ${fmtElapsed(cp.elapsedSec)}`}
+                </span>
+                ${actions.length > 0 ? `
+                  <button onclick="toggleCodexTimeline(event, '${convId}')"
+                          class="px-2 py-0.5 rounded-md border border-[var(--hud-border)] bg-[var(--card)] hover:border-emerald-500/50 hover:text-emerald-600 transition text-[11px] font-sans font-medium whitespace-nowrap">
+                    ${isTimelineOpen ? '收起过程 ▴' : `📜 过程明细 (${actions.length})`}
+                  </button>
+                ` : ''}
+                ${isLinkedFromAgy && linkedMeta?.conversationId ? `
+                  <button onclick="jumpToConversation(event, '${linkedMeta.conversationId}')"
+                          class="px-2 py-0.5 rounded-md border border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 font-sans font-semibold transition text-[11px] whitespace-nowrap">
+                    Codex ↗
+                  </button>
+                ` : ''}
+                ${cp.isRunning && cp.bridgePid ? `
+                  <button onclick="stopCodexTurn(event, '${cp.threadId}')"
+                          class="px-2 py-0.5 rounded-md border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 font-sans font-bold transition text-[11px] whitespace-nowrap">
+                    🛑 停止
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+
+            ${cp.latestCommentary ? `
+              <div class="text-xs text-[var(--foreground)] bg-[var(--card)]/90 px-2.5 py-2 rounded-lg border border-[var(--hud-border)]/80 leading-relaxed">
+                <span class="font-bold text-emerald-600 dark:text-emerald-400 mr-1">${cp.isRunning ? '💬 最新进展:' : '💬 完成总结:'}</span>
+                <span>${escapeHtml(cp.latestCommentary)}</span>
+              </div>
+            ` : ''}
+
+            ${cp.isRunning && cp.currentAction ? `
+              <div class="text-[11px] mono text-[var(--muted-foreground)] truncate bg-[var(--card)]/75 px-2.5 py-1 rounded-md border border-[var(--hud-border)]/60"
+                   title="${escapeHtml(cp.currentAction)}">
+                ${escapeHtml(cp.currentAction)}
+              </div>
+            ` : ''}
+
+            ${isTimelineOpen && actions.length > 0 ? `
+              <div data-scroll-id="codex-tl-${escapeHtml(convId)}"
+                   class="mt-1 bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-1.5 text-slate-200 max-h-48 overflow-y-auto">
+                <div class="text-[10px] text-slate-400 mono border-b border-slate-800 pb-1 flex items-center justify-between">
+                  <span>Codex 实时执行流水线 (最近 ${actions.length} 步 · 每 1.5s 自动同步)</span>
+                  <span>Thread: ${escapeHtml((cp.threadId || '').slice(0, 8))}</span>
+                </div>
+                ${[...actions].reverse().map(act => `
+                  <div class="text-[11px] mono flex items-start gap-1.5 py-0.5 border-b border-slate-900/80 last:border-0 leading-relaxed">
+                    <span class="text-slate-500 shrink-0">[${escapeHtml(act.timeStr || '--')}]</span>
+                    <span class="shrink-0">${act.icon || '•'}</span>
+                    <span class="${act.kind === 'COMMENTARY' ? 'text-emerald-300 font-sans' : act.kind === 'FILE' ? 'text-amber-300' : 'text-slate-200'} break-all">${escapeHtml(act.summary)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+  </script>
+  <script src="/ui_inline_detail.js"></script>
+  <script src="/ui_fleet_cards.js"></script>
+  <script>
+    updateFilterButtonsUI();
+    fetchTelemetry();
+    setInterval(fetchTelemetry, 1500);
+  </script>
+</body>
+</html>
