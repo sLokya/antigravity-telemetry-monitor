@@ -2708,6 +2708,8 @@ async function buildTelemetryPayload(requestedConvId) {
       fleetCombinedTps,
       fleetAvgTps,
       maxContextPct: maxContextTask?.contextPct || 0,
+      maxContextUsed: maxContextTask?.contextUsed || 0,
+      maxContextLimit: maxContextTask?.maxContext || 0,
       maxContextTitle: maxContextTask?.workspaceLabel || '--',
     },
     fingerprintLedger: {

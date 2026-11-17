@@ -206,16 +206,17 @@
             <div id="kpiFleetTpsSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">并行合流吞吐</div>
           </div>
 
-          <!-- Tile 3: Peak Context Watermark -->
+          <!-- Tile 3: Peak Context Size -->
           <div class="kpi-tile kpi-span-wide rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
             <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span class="truncate whitespace-nowrap">最高<span class="hidden sm:inline">上下文</span>水位</span>
+              <span class="truncate whitespace-nowrap">最高上下文<span class="hidden sm:inline">大小</span></span>
               <span class="w-5 h-5 rounded-md bg-amber-500/10 text-amber-500 flex items-center justify-center text-xs font-bold shrink-0">📊</span>
             </div>
-            <div id="kpiMaxCtx" class="text-sm sm:text-base font-extrabold mono text-amber-600 dark:text-amber-400 mt-1 truncate">--%</div>
+            <div id="kpiMaxCtx" class="text-sm sm:text-base font-extrabold mono text-amber-600 dark:text-amber-400 mt-1 truncate">-- / -- (--%)</div>
             <div class="w-full bg-[var(--card)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)] mt-1">
               <div id="kpiMaxCtxBar" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
             </div>
+            <div id="kpiMaxCtxSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">--</div>
           </div>
         </div>
 

@@ -179,8 +179,9 @@
         ` : ''}
         <span class="metric-pill px-1.5 py-0.5 rounded-md" title="当前/末轮任务流式吐字速度 vs 会话全局平均">${speedHtml}</span>
         <span class="metric-pill px-1.5 py-0.5 rounded-md" title="当前/末轮任务缓存命中率与实际读取大小(k) vs 会话全局平均">${cacheHtml}</span>
-        <div class="flex items-center gap-1.5 metric-pill px-2 py-0.5 rounded-md">
-          <span class="${ctxTextClass} text-[11px]">水位 ${t.contextPct}%</span>
+        <div class="flex items-center gap-1.5 metric-pill px-2 py-0.5 rounded-md" title="当前对话上下文大小 / 上下文窗口上限">
+          <span class="text-[11px] text-[var(--muted-foreground)]">上下文大小</span>
+          <span class="${ctxTextClass} text-[11px]">${fmtNum(t.contextUsed || 0)}/${fmtNum(t.maxContext || 0)} (${t.contextPct}%)</span>
           <div class="w-10 bg-[var(--card)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)] shrink-0">
             <div class="${ctxBarColor} h-full transition-all duration-300" style="width: ${Math.min(100, t.contextPct)}%"></div>
           </div>
@@ -293,7 +294,15 @@
       ov.fleetCombinedTps > 0 ? `实时并发合流 ${ov.fleetCombinedTps} tok/s` : '近期平均流式吐字';
 
     const maxPct = ov.maxContextPct || 0;
-    document.getElementById('kpiMaxCtx').textContent = `${maxPct}% (${ov.maxContextTitle || '--'})`;
+    const maxUsed = ov.maxContextUsed || 0;
+    const maxLim = ov.maxContextLimit || 0;
+    document.getElementById('kpiMaxCtx').textContent = maxLim > 0
+      ? `${fmtNum(maxUsed)} / ${fmtNum(maxLim)} (${maxPct}%)`
+      : `${maxPct}%`;
+    const maxSubEl = document.getElementById('kpiMaxCtxSub');
+    if (maxSubEl) {
+      maxSubEl.textContent = `最高上下文对话: ${ov.maxContextTitle || '--'}`;
+    }
     const maxBar = document.getElementById('kpiMaxCtxBar');
     maxBar.className = `${getCtxColor(maxPct)} h-full transition-all duration-300`;
     maxBar.style.width = `${Math.min(100, maxPct)}%`;

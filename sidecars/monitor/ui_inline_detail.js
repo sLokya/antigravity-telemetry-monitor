@@ -186,6 +186,9 @@
     const peakEffTps = sum.peakEffectiveTps > 0 ? sum.peakEffectiveTps : '--';
     const avgCachePct = sum.avgCacheHitRate !== undefined ? `${sum.avgCacheHitRate}%` : '--%';
 
+    const ctxUsed = latest?.contextUsed ?? task.contextUsed ?? 0;
+    const ctxMax = latest?.maxContext ?? task.maxContext ?? 256000;
+    const ctxPct = ctxMax > 0 ? +((ctxUsed / ctxMax) * 100).toFixed(1) : (task.contextPct || 0);
     const curTokensStr = curTurn ? fmtNum(curTurn.totalTokens) : '--';
     const curOutStr = curTurn ? fmtNum(curTurn.outputTokens) : '--';
     const curDurStr = curTurn?.totalSec > 0 ? fmtElapsed(curTurn.totalSec) : '--';
@@ -268,6 +271,17 @@
           </div>
         </div>
 
+        <!-- Context Size Bar -->
+        <div class="bg-[var(--card)] rounded-lg px-2.5 py-1.5 border border-[var(--hud-border)] space-y-1">
+          <div class="flex items-center justify-between text-[11px] mono">
+            <span class="text-[var(--muted-foreground)] font-sans">上下文大小</span>
+            <span class="${getCtxTextColor(ctxPct)} font-semibold">${fmtNum(ctxUsed)} / ${fmtNum(ctxMax)} (${ctxPct}%)</span>
+          </div>
+          <div class="w-full bg-[var(--background)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)]">
+            <div class="${getCtxColor(ctxPct)} h-full transition-all duration-300" style="width: ${Math.min(100, ctxPct)}%"></div>
+          </div>
+        </div>
+
         <!-- Compact Diagnostics Summary -->
         <div class="kpi-tile rounded-xl p-2 space-y-1.5 text-xs">
           <div class="flex flex-wrap items-center justify-between gap-1.5">
@@ -326,7 +340,10 @@
                   ? '<span class="px-1.5 py-0.5 rounded bg-rose-500/12 text-rose-500 border border-rose-500/30 whitespace-nowrap shrink-0">已中止</span>'
                   : '<span class="px-1.5 py-0.5 rounded bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 whitespace-nowrap shrink-0">✓ 完成</span>';
               const clock = fmtClockShort(tr.startedAtMs || tr.completedAtMs);
-              const tokenDetailTip = `未命中输入 ${fmtNum(tr.inputTokens)} + 缓存读取 ${fmtNum(tr.cacheReadTokens)} + 输出 ${fmtNum(tr.outputTokens)} (思${fmtNum(tr.thinkingTokens)}/答${fmtNum(tr.responseTokens)})`;
+              const cacheSharePct = tr.totalTokens > 0 ? +((tr.cacheReadTokens / tr.totalTokens) * 100).toFixed(1) : 0;
+              const turnCtxMax = tr.maxContext || ctxMax || 256000;
+              const turnCtxPct = tr.contextUsed > 0 && turnCtxMax > 0 ? +((tr.contextUsed / turnCtxMax) * 100).toFixed(1) : 0;
+              const tokenDetailTip = `未命中输入 ${fmtNum(tr.inputTokens)} + 缓存读取 ${fmtCacheK(tr.cacheReadTokens)} (占总Token ${cacheSharePct}%, 命中率 ${tr.cacheHitRate}%) + 输出 ${fmtNum(tr.outputTokens)} (思${fmtNum(tr.thinkingTokens)}/答${fmtNum(tr.responseTokens)})`;
               return `
                 <div class="rounded-xl border ${tr.isRunning ? 'border-sky-500/45 bg-sky-500/5' : 'border-[var(--hud-border)] bg-[var(--card)]'} overflow-hidden">
                   <div onclick="toggleTurnStepsExpand(event, '${escapeHtml(tr.turnId)}')"
@@ -350,16 +367,21 @@
                       <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap">
                         流式 <strong class="text-emerald-600 dark:text-emerald-400">${tr.streamingTps > 0 ? tr.streamingTps : '--'}</strong> tok/s
                       </span>
-                      <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap">
-                        缓存 <strong class="text-amber-600 dark:text-amber-400">${tr.stepCount > 0 ? `${tr.cacheHitRate}% (${fmtCacheK(tr.cacheReadTokens)})` : '--%'}</strong>
+                      <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap" title="本轮提示词缓存命中率 ${tr.cacheHitRate}% · 缓存读取 ${fmtCacheK(tr.cacheReadTokens)} · 占本轮总Token ${cacheSharePct}%">
+                        缓存比例 <strong class="text-amber-600 dark:text-amber-400">${tr.stepCount > 0 ? `${tr.cacheHitRate}% (${fmtCacheK(tr.cacheReadTokens)})` : '--%'}</strong>
                       </span>
+                      ${tr.contextUsed > 0 ? `
+                        <span class="px-1.5 py-0.5 rounded metric-pill whitespace-nowrap" title="本轮末步上下文大小 / 上限">
+                          上下文 <strong class="${getCtxTextColor(turnCtxPct)}">${fmtNum(tr.contextUsed)}/${fmtNum(turnCtxMax)}</strong> (${turnCtxPct}%)
+                        </span>
+                      ` : ''}
                     </div>
 
                     <div class="flex flex-wrap items-center justify-between gap-1.5 text-[11px] mono pt-0.5 border-t border-[var(--hud-border)]">
                       <span class="px-2 py-0.5 rounded-md border border-indigo-500/35 bg-indigo-500/12 text-indigo-700 dark:text-indigo-300 font-bold"
                             title="${escapeHtml(tokenDetailTip)}">
                         📊 总 ${fmtNum(tr.totalTokens)} tok
-                        <span class="font-normal opacity-85">(入${fmtNum(tr.inputTokens)} / 缓${fmtNum(tr.cacheReadTokens)} / 出${fmtNum(tr.outputTokens)})</span>
+                        <span class="font-normal opacity-85">(入${fmtNum(tr.inputTokens)} / 缓${fmtCacheK(tr.cacheReadTokens)}·${cacheSharePct}% / 出${fmtNum(tr.outputTokens)})</span>
                       </span>
                       ${fmtQuotaUsageBadges(tr.quotaUsage, tr.isRunning)}
                     </div>
