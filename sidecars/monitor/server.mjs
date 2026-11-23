@@ -1,39 +1,17 @@
 import { SidecarApp, Response } from 'sidecar_sdk';
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-  readdirSync,
-  statSync,
-  fstatSync,
-  openSync,
-  readSync,
-  closeSync,
-} from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, fstatSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  FINGERPRINT_LEDGER_FILE,
-  isResponseModelMismatched,
-  decodeThinkingSignatureFingerprint,
-  loadFingerprintLedger,
-  flushFingerprintLedger,
-  recordModelFingerprint,
-  acknowledgeFingerprintChanges,
+  FINGERPRINT_LEDGER_FILE, isResponseModelMismatched, decodeThinkingSignatureFingerprint,
+  loadFingerprintLedger, flushFingerprintLedger, recordModelFingerprint, acknowledgeFingerprintChanges,
 } from './fingerprint_ledger.mjs';
-import {
-  extractUserPromptPreview,
-  aggregateStepsToTurns,
-  computeConversationTurnMetrics,
-} from './turn_aggregator.mjs';
-import {
-  reconcileAndPersistHistory,
-  getPersistedTurnsForConversation,
-} from './task_history_store.mjs';
+import { extractUserPromptPreview, buildWakeTurn, aggregateStepsToTurns, computeConversationTurnMetrics } from './turn_aggregator.mjs';
+import { reconcileAndPersistHistory, getPersistedTurnsForConversation } from './task_history_store.mjs';
+import { buildRootMap, finalizeFleet, preselect, finalSelect, dismissConversation, restoreConversation } from './fleet/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = homedir();
@@ -164,12 +142,25 @@ function inspectTranscriptAndBgCandidates(convId) {
     const bgMap = new Map(); // stepIndex -> candidate info
     const codexThreadIdSet = new Set();
     const userTurns = [];
+    const wakeTurns = [];
+    let firstCreatedAtMs = 0;
+    let prevLineCreatedMs = 0;
+    let prevLineWasSys = false;
     let prevPlannerObj = null;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const isTail = i >= lines.length - 12;
       const isUserInput = line.includes('"USER_INPUT"');
+      const isSysMsg = line.includes('"SYSTEM_MESSAGE"');
+      const createdMatch = line.match(/"created_at"\s*:\s*"([^"]+)"/);
+      const lineCreatedMs = createdMatch ? Date.parse(createdMatch[1]) || 0 : 0;
+      if (i === 0 && lineCreatedMs) firstCreatedAtMs = lineCreatedMs;
+      const curPrevCreatedMs = prevLineCreatedMs;
+      const curPrevWasSys = prevLineWasSys;
+      if (lineCreatedMs) prevLineCreatedMs = lineCreatedMs;
+      prevLineWasSys = isSysMsg;
+
       const hasBgSpawn = line.includes('Tool is running as a background task with task id:');
       const hasBgFinish =
         (line.includes('Task id "') &&
@@ -199,7 +190,7 @@ function inspectTranscriptAndBgCandidates(convId) {
         }
       }
 
-      if (!isTail && !isUserInput && !hasBgSpawn && !hasBgFinish && !mightBePlannerBeforeBg) {
+      if (!isTail && !isUserInput && !isSysMsg && !hasBgSpawn && !hasBgFinish && !mightBePlannerBeforeBg) {
         continue;
       }
 
@@ -211,6 +202,9 @@ function inspectTranscriptAndBgCandidates(convId) {
             createdAtMs: obj.created_at ? Date.parse(obj.created_at) || 0 : 0,
             promptPreview: extractUserPromptPreview(obj.content || ''),
           });
+        } else {
+          const wake = buildWakeTurn(obj, i, curPrevCreatedMs, curPrevWasSys, wakeTurns.length);
+          if (wake) wakeTurns.push(wake);
         }
         if (obj.type === 'PLANNER_RESPONSE') {
           prevPlannerObj = obj;
@@ -384,6 +378,8 @@ function inspectTranscriptAndBgCandidates(convId) {
       unclosedNonDaemonBgCount,
       codexThreadIds,
       userTurns,
+      wakeTurns,
+      firstCreatedAtMs,
     };
 
     transcriptInspectCache.set(convId, {
@@ -2281,17 +2277,11 @@ async function buildTelemetryPayload(requestedConvId) {
     // ignore disk scan errors
   }
 
-  // Pre-sort by LS running status, unarchived, non-subagent, and mtime
-  const initialCandidates = Array.from(candidateMap.values())
-    .sort((a, b) => {
-      const aRun = a.lsStatus === 'CASCADE_RUN_STATUS_RUNNING' ? 1 : 0;
-      const bRun = b.lsStatus === 'CASCADE_RUN_STATUS_RUNNING' ? 1 : 0;
-      if (aRun !== bRun) return bRun - aRun;
-      if (a.isArchived !== b.isArchived) return a.isArchived ? 1 : -1;
-      if (a.isSubagent !== b.isSubagent) return a.isSubagent ? 1 : -1;
-      return b.mtimeMs - a.mtimeMs;
-    })
-    .slice(0, 35);
+  const candidates = Array.from(candidateMap.values());
+  const rootMap = buildRootMap(candidates, BRAIN_DIR);
+
+  // Pre-select roots + their active/recent subagent children
+  const initialCandidates = preselect(candidates, rootMap.rootOf);
 
   const enrichedCandidates = initialCandidates.map((item) => {
     const transcriptInfo = inspectTranscriptAndBgCandidates(item.conversationId);
@@ -2311,16 +2301,7 @@ async function buildTelemetryPayload(requestedConvId) {
     };
   });
 
-  const sortedCandidates = enrichedCandidates
-    .sort((a, b) => {
-      const aActive = a.lsStatus === 'CASCADE_RUN_STATUS_RUNNING' || a.hasUnclosedBg ? 1 : 0;
-      const bActive = b.lsStatus === 'CASCADE_RUN_STATUS_RUNNING' || b.hasUnclosedBg ? 1 : 0;
-      if (aActive !== bActive) return bActive - aActive;
-      if (a.isArchived !== b.isArchived) return a.isArchived ? 1 : -1;
-      if (a.isSubagent !== b.isSubagent) return a.isSubagent ? 1 : -1;
-      return b.mtimeMs - a.mtimeMs;
-    })
-    .slice(0, 24);
+  const sortedCandidates = finalSelect(enrichedCandidates, rootMap.rootOf);
 
   const fleetTasks = await Promise.all(
     sortedCandidates.map(async (item) => {
@@ -2400,6 +2381,8 @@ async function buildTelemetryPayload(requestedConvId) {
         engine: 'AGY',
         steps: parsed.steps,
         userTurns: transcriptInfo?.userTurns || [],
+        wakeTurns: transcriptInfo?.wakeTurns || [],
+        firstCreatedAtMs: transcriptInfo?.firstCreatedAtMs || 0,
         isConvRunning: workState.isRunning,
         fallbackModelLabel: latestStep?.modelLabel || selectedModelInfo?.label || 'Auto',
         fallbackExactModelId: resolvedExactId,
@@ -2413,6 +2396,7 @@ async function buildTelemetryPayload(requestedConvId) {
       return {
         engine: 'AGY',
         conversationId: item.conversationId,
+        parentConversationId: item.parentConversationId || '',
         title: item.title,
         workspaceLabel: item.workspaceLabel,
         isSubagent: item.isSubagent,
@@ -2545,22 +2529,11 @@ async function buildTelemetryPayload(requestedConvId) {
   // Reconcile per-turn history & incremental 5h/weekly quota usage
   reconcileAndPersistHistory({ fleetTasks: combinedFleet, quotaGroups, nowMs });
 
+  // Nest subagents/swarm workers into roots, merge totals, and apply dismiss state
+  const { roots, byId } = finalizeFleet({ tasks: combinedFleet, rootMap, nowMs });
+
   flushFingerprintLedger(false);
   const fpLedger = loadFingerprintLedger();
-
-  // Sort: tasks with running foreground, running background, or running Codex synergy first, then by mtimeMs
-  combinedFleet.sort((a, b) => {
-    const aActive =
-      a.isRunning || (a.runningBgCount || 0) > 0 || Boolean(a.linkedCodex?.isRunning) ? 1 : 0;
-    const bActive =
-      b.isRunning || (b.runningBgCount || 0) > 0 || Boolean(b.linkedCodex?.isRunning) ? 1 : 0;
-    if (aActive !== bActive) return bActive - aActive;
-    if ((a.runningBgCount || 0) !== (b.runningBgCount || 0)) {
-      return (b.runningBgCount || 0) - (a.runningBgCount || 0);
-    }
-    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
-    return b.mtimeMs - a.mtimeMs;
-  });
 
   const runningTasksCount = combinedFleet.filter((t) => t.isRunning).length;
   const runningCodexCount = codexTasks.filter((t) => t.isRunning).length;
@@ -2590,7 +2563,7 @@ async function buildTelemetryPayload(requestedConvId) {
   const activeConvId =
     requestedConvId && requestedConvId !== 'auto'
       ? requestedConvId
-      : combinedFleet[0]?.conversationId || process.env.ANTIGRAVITY_CONVERSATION_ID || '';
+      : roots[0]?.conversationId || process.env.ANTIGRAVITY_CONVERSATION_ID || '';
 
   const isCodexTarget = String(activeConvId).startsWith('codex:');
   const codexTargetParsed = isCodexTarget ? codexParsedMap.get(activeConvId) : null;
@@ -2633,7 +2606,7 @@ async function buildTelemetryPayload(requestedConvId) {
     quotaGroups
   );
 
-  const selectedFleetTask = combinedFleet.find((t) => t.conversationId === activeConvId) || null;
+  const selectedFleetTask = byId.get(activeConvId) || null;
   let activeTurns = selectedFleetTask?.turns || null;
   if (!activeTurns && activeConvId) {
     const computedTurns = aggregateStepsToTurns({
@@ -2641,6 +2614,8 @@ async function buildTelemetryPayload(requestedConvId) {
       engine: isCodexTarget ? 'CODEX' : 'AGY',
       steps: targetParsed.steps || [],
       userTurns: targetTranscript?.userTurns || [],
+      wakeTurns: targetTranscript?.wakeTurns || [],
+      firstCreatedAtMs: targetTranscript?.firstCreatedAtMs || 0,
       codexTurns: codexTargetParsed?.codexTurns || [],
       isConvRunning: Boolean(targetWorkState.stateCode && targetWorkState.stateCode !== 'IDLE'),
       fallbackModelLabel: latestStep?.modelLabel || selectedModelInfo?.label || 'Auto',
@@ -2664,7 +2639,7 @@ async function buildTelemetryPayload(requestedConvId) {
   );
 
   // Strip heavy per-turn step arrays from fleetTasks items (full turns live on top-level `turns` for activeConvId)
-  const sanitizedFleet = combinedFleet.map((t) => {
+  const sanitizedFleet = roots.map((t) => {
     const { turns: _dropTurns, currentTurn, ...rest } = t;
     let compactCurrent = null;
     if (currentTurn) {
@@ -2680,9 +2655,8 @@ async function buildTelemetryPayload(requestedConvId) {
 
   let uiMtimeVer = 10;
   try {
-    const uiFiles = ['index.html', 'ui_i18n.js', 'ui_fleet_cards.js', 'ui_inline_detail.js'];
     let maxMt = 0;
-    for (const f of uiFiles) {
+    for (const f of ['index.html', ...UI_SCRIPTS]) {
       const fp = join(__dirname, f);
       if (existsSync(fp)) maxMt = Math.max(maxMt, statSync(fp).mtimeMs);
     }
@@ -2703,7 +2677,7 @@ async function buildTelemetryPayload(requestedConvId) {
       runningTasksCount,
       runningCodexCount,
       runningBgTasksCount,
-      totalTrackedTasks: combinedFleet.length,
+      totalTrackedTasks: roots.length,
       totalCodexTasks: codexTasks.length,
       fleetCombinedTps,
       fleetAvgTps,
@@ -2737,9 +2711,14 @@ async function buildTelemetryPayload(requestedConvId) {
     latest: latestStep,
     summary: {
       ...(targetParsed.summary || {}),
-      avgCacheHitRate: activeTurnMetrics.avgCacheHitRate,
-      totalCacheReadTokens: activeTurnMetrics.totalCacheReadTokens,
-      totalAllTokens: activeTurnMetrics.totalAllTokens,
+      avgCacheHitRate:
+        selectedFleetTask?.sessionTotals?.cacheHitRate ?? activeTurnMetrics.avgCacheHitRate,
+      totalCacheReadTokens:
+        selectedFleetTask?.sessionTotals?.cacheReadTokens ?? activeTurnMetrics.totalCacheReadTokens,
+      totalAllTokens:
+        selectedFleetTask?.sessionTotals?.totalTokens ?? activeTurnMetrics.totalAllTokens,
+      sessionTotals: selectedFleetTask?.sessionTotals || null,
+      subagents: selectedFleetTask?.subagents || [],
       isCurrentRunning: activeTurnMetrics.isCurrentRunning,
       currentTurn: activeTurnMetrics.currentTurn
         ? (() => {
@@ -2748,7 +2727,9 @@ async function buildTelemetryPayload(requestedConvId) {
           })()
         : null,
     },
-    turns: activeTurns || [],
+    turns: (activeTurns || []).map((tr) =>
+      Array.isArray(tr.steps) && tr.steps.length > 25 ? { ...tr, steps: tr.steps.slice(-25) } : tr
+    ),
     steps: targetParsed.steps.slice(-25),
   };
 }
@@ -2815,6 +2796,16 @@ async function handleActionRequest(data) {
   }
 
   try {
+    if (action === 'dismiss_task') {
+      dismissConversation(convId, Date.now());
+      return { ok: true, message: '已从最近活跃中关闭该卡片' };
+    }
+
+    if (action === 'restore_task') {
+      restoreConversation(convId);
+      return { ok: true, message: '已恢复卡片到最近活跃列表' };
+    }
+
     if (action === 'kill_bg_task') {
       if (stepIndices.length === 0) {
         return { ok: false, error: 'Missing stepIndex for kill_bg_task' };
@@ -2880,50 +2871,22 @@ const noCacheHeaders = {
   Pragma: 'no-cache',
 };
 
+const UI_SCRIPTS = ['ui_i18n.js', 'ui_card_metrics.js', 'ui_subagent_tray.js', 'ui_turn_list.js', 'ui_inline_detail.js', 'ui_fleet_cards.js'];
+
 function renderAssembledIndexHtml() {
   let html = readFileSync(join(__dirname, 'index.html'), 'utf-8');
-  const i18nJs = readFileSync(join(__dirname, 'ui_i18n.js'), 'utf-8');
-  const detailJs = readFileSync(join(__dirname, 'ui_inline_detail.js'), 'utf-8');
-  const fleetJs = readFileSync(join(__dirname, 'ui_fleet_cards.js'), 'utf-8');
-  html = html.replace(
-    '<script src="/ui_i18n.js"></script>',
-    `<script>\n${i18nJs}\n</script>`
-  );
-  html = html.replace(
-    '<script src="/ui_inline_detail.js"></script>',
-    `<script>\n${detailJs}\n</script>`
-  );
-  html = html.replace(
-    '<script src="/ui_fleet_cards.js"></script>',
-    `<script>\n${fleetJs}\n</script>`
-  );
+  for (const f of UI_SCRIPTS) {
+    html = html.replace(`<script src="/${f}"></script>`, `<script>\n${readFileSync(join(__dirname, f), 'utf-8')}\n</script>`);
+  }
   return html;
 }
 
-app.page('/', () =>
-  new Response(renderAssembledIndexHtml(), {
-    contentType: 'text/html; charset=utf-8',
-    headers: noCacheHeaders,
-  })
-);
-app.page('/index.html', () =>
-  new Response(renderAssembledIndexHtml(), {
-    contentType: 'text/html; charset=utf-8',
-    headers: noCacheHeaders,
-  })
-);
-app.page('/ui_fleet_cards.js', () =>
-  new Response(readFileSync(join(__dirname, 'ui_fleet_cards.js'), 'utf-8'), {
-    contentType: 'application/javascript; charset=utf-8',
-    headers: noCacheHeaders,
-  })
-);
-app.page('/ui_inline_detail.js', () =>
-  new Response(readFileSync(join(__dirname, 'ui_inline_detail.js'), 'utf-8'), {
-    contentType: 'application/javascript; charset=utf-8',
-    headers: noCacheHeaders,
-  })
-);
+for (const p of ['/', '/index.html']) {
+  app.page(p, () => new Response(renderAssembledIndexHtml(), { contentType: 'text/html; charset=utf-8', headers: noCacheHeaders }));
+}
+for (const f of UI_SCRIPTS) {
+  app.page(`/${f}`, () => new Response(readFileSync(join(__dirname, f), 'utf-8'), { contentType: 'application/javascript; charset=utf-8', headers: noCacheHeaders }));
+}
 
 app.api('/api/telemetry', async (data) => {
   return buildTelemetryPayload(data?.conversationId);

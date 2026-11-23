@@ -1,48 +1,51 @@
 (function () {
-  const PILL_CLS = 'metric-pill inline-flex flex-wrap items-center gap-1 px-2 py-0.5 rounded-md text-[11px] leading-4 mono';
+  const optimisticDismissMap = new Map(); // convId -> { atMs, actMs }
 
-  function sp() {
-    return window.getHudLang() === 'en' ? ' ' : '';
-  }
+  window.dismissTask = async function (event, convId) {
+    event.stopPropagation();
+    const list = window.lastPayload?.fleetTasks || [];
+    const target = list.find((t) => t.conversationId === convId);
+    optimisticDismissMap.set(convId, {
+      atMs: Date.now(),
+      actMs: target?.activityMtimeMs || target?.mtimeMs || 0,
+    });
+    if (window.selectedConvId === convId) {
+      window.selectedConvId = null;
+    }
+    if (window.lastPayload) {
+      window.renderFleet(window.lastPayload);
+    }
+    try {
+      const res = await callActionApi({ action: 'dismiss_task', conversationId: convId });
+      showToast(res.ok ? tHud('dismissToast') : res.error || 'Error', !res.ok);
+      await fetchTelemetry();
+    } catch (err) {
+      optimisticDismissMap.delete(convId);
+      showToast(String(err?.message || err), true);
+    }
+  };
 
-  function formatCardQuotaPill(t) {
-    const turnTag = tHud(t.isCurrentRunning ? 'turnCur' : 'turnLast');
-    const titlePrefix = `${turnTag}${sp()}${tHud('quotaLabel')}`;
-    const q = t.currentTurn?.quotaUsage;
-    if (!q) {
-      return `
-        <span class="${PILL_CLS} whitespace-nowrap"
-              title="${escapeHtml(tHud('quotaNoneTip'))}">
-          <span class="text-[var(--muted-foreground)]">🔋 ${escapeHtml(titlePrefix)}</span>
-          <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('quotaEmpty'))}</span>
-        </span>
-      `;
+  window.restoreTask = async function (event, convId) {
+    event.stopPropagation();
+    optimisticDismissMap.delete(convId);
+    try {
+      const res = await callActionApi({ action: 'restore_task', conversationId: convId });
+      showToast(res.ok ? tHud('restoreToast') : res.error || 'Error', !res.ok);
+      await fetchTelemetry();
+    } catch (err) {
+      showToast(String(err?.message || err), true);
     }
-    const u5 = q.fiveHourUsedPct ?? 0;
-    const uw = q.weeklyUsedPct ?? 0;
-    const approx = q.isApproxConcurrent ? '~' : '';
-    if (u5 === 0 && uw === 0) {
-      const valueStr = t.currentTurn?.isRunning
-        ? tHud('quotaSyncing')
-        : `5h <0.01% · ${tHud('quotaWeek')} <0.01%`;
-      return `
-        <span class="${PILL_CLS} whitespace-nowrap"
-              title="${escapeHtml(tHud('quotaWaitTip'))}">
-          <span class="text-[var(--muted-foreground)]">🔋 ${escapeHtml(titlePrefix)}</span>
-          <span class="text-sky-600 dark:text-sky-400 font-semibold">${escapeHtml(valueStr)}</span>
-        </span>
-      `;
+  };
+
+  function isOptimisticDismissed(t) {
+    const entry = optimisticDismissMap.get(t.conversationId);
+    if (!entry) return false;
+    const actMs = t.activityMtimeMs || t.mtimeMs || 0;
+    if (t.isDismissed || isTaskInProgress(t) || actMs > entry.actMs + 1500 || Date.now() - entry.atMs > 8000) {
+      optimisticDismissMap.delete(t.conversationId);
+      return false;
     }
-    const valCls = q.isApproxConcurrent
-      ? 'text-amber-600 dark:text-amber-300 font-bold'
-      : 'text-sky-600 dark:text-sky-300 font-bold';
-    return `
-      <span class="${PILL_CLS} whitespace-nowrap"
-            title="${escapeHtml(q.isApproxConcurrent ? tHud('quotaConcurrentTip') : tHud('quotaRecordedTip'))}">
-        <span class="text-[var(--muted-foreground)]">🔋 ${escapeHtml(titlePrefix)}</span>
-        <span class="${valCls}">5h ${approx}-${u5}% · ${tHud('quotaWeek')} ${approx}-${uw}%</span>
-      </span>
-    `;
+    return true;
   }
 
   function renderQuotaPoolRow(label, textCls, barBg, bucket) {
@@ -149,76 +152,6 @@
     `;
   }
 
-  function renderTurnMetricPillsHtml(t, isCodex) {
-    const cleanTier = String(t.modelLabel || '').replace(/^Orchestrator\s*/i, '').replace(/^\((.+)\)$/, '$1').trim();
-    const showTier = String(t.exactModelId || '').includes('orchestrator') && cleanTier;
-    const metaTip = `${tHud('cfgModel')}: ${t.modelLabel} (${t.requestedModelId || t.exactModelId}) | ${tHud('respModel')}: ${t.responseModel}${t.execModelId ? ` | ${tHud('execModel')}: ${t.execModelId}` : ''} | ${tHud('diagProvider')}: ${t.apiProvider}`;
-
-    const turnTag = tHud(t.isCurrentRunning ? 'turnCur' : 'turnLast');
-    const avgLbl = `${tHud('avgShort')}${sp()}`;
-    const totLbl = `${tHud('totalShort')}${sp()}`;
-    const hasTurnSteps = (t.currentTurn?.stepCount ?? 1) > 0;
-    const avgTpsStr = t.avgStreamingTps > 0 ? t.avgStreamingTps : '--';
-    const avgCacheStr = t.avgCacheHitRate !== undefined ? `${t.avgCacheHitRate}%` : '--%';
-
-    const speedHtml = hasTurnSteps && t.streamingTps > 0
-      ? `<span class="text-[var(--muted-foreground)]">${escapeHtml(turnTag)}</span> <strong class="text-emerald-600 dark:text-emerald-400">${t.streamingTps}</strong> <span class="text-[var(--muted-foreground)]">tok/s (${escapeHtml(avgLbl)}${avgTpsStr})</span>`
-      : hasTurnSteps && t.effectiveTps > 0
-        ? `<span class="text-[var(--muted-foreground)]">${escapeHtml(turnTag)} E2E</span> <strong class="text-indigo-600 dark:text-indigo-400">${t.effectiveTps}</strong> <span class="text-[var(--muted-foreground)]">(${escapeHtml(avgLbl)}${avgTpsStr})</span>`
-        : `<span class="text-[var(--muted-foreground)]">${escapeHtml(turnTag)} -- tok/s (${escapeHtml(avgLbl)}${avgTpsStr})</span>`;
-
-    const curCacheTok = t.currentTurn?.cacheReadTokens ?? t.cacheReadTokens ?? 0;
-    const totalCacheTok = t.totalCacheReadTokens ?? curCacheTok;
-    const cacheTitle = `${tHud('cacheLabel')}${sp()}${turnTag}`;
-    const cacheHtml = hasTurnSteps
-      ? `<span class="text-[var(--muted-foreground)]">${escapeHtml(cacheTitle)}</span> <strong class="text-amber-600 dark:text-amber-400">${t.cacheHitRate}%</strong> <span class="text-amber-700/85 dark:text-amber-300/85 font-medium">(${fmtCacheK(curCacheTok)})</span> <span class="text-[var(--muted-foreground)]">(${escapeHtml(avgLbl)}${avgCacheStr} · ${escapeHtml(totLbl)}${fmtCacheK(totalCacheTok)})</span>`
-      : `<span class="text-[var(--muted-foreground)]">${escapeHtml(cacheTitle)} --% (${escapeHtml(avgLbl)}${avgCacheStr} · ${escapeHtml(totLbl)}${fmtCacheK(totalCacheTok)})</span>`;
-
-    const curTok = t.currentTurn?.totalTokens ?? t.totalAllTokens ?? 0;
-    const curInTok = t.currentTurn?.inputTokens ?? 0;
-    const curOutTok = t.currentTurn?.outputTokens ?? t.outputTokens ?? 0;
-    const totalTok = t.totalAllTokens ?? curTok;
-    const inTag = `${tHud('tokIn')}${sp()}`;
-    const cacheTag = `${tHud('tokCache')}${sp()}`;
-    const outTag = `${tHud('tokOut')}${sp()}`;
-    const tokTitle = `${turnTag}${sp()}${tHud('tokLabel')}`;
-    const tokTip = `${tokTitle}: ${fmtNum(curTok)} (${inTag}${fmtNum(curInTok)} / ${cacheTag}${fmtCacheK(curCacheTok)} / ${outTag}${fmtNum(curOutTok)}) | ${tHud('sessionTotal')}: ${fmtNum(totalTok)}`;
-
-    const ctxBarColor = getCtxColor(t.contextPct);
-    const ctxTextClass = getCtxTextColor(t.contextPct);
-
-    return `
-      <div class="flex flex-wrap items-center gap-1.5 text-[11px] leading-4 mono">
-        <span class="${PILL_CLS} ${isCodex ? 'text-emerald-600 dark:text-emerald-400' : 'text-sky-600 dark:text-sky-400'} font-bold max-w-full break-all" title="${escapeHtml(metaTip)}">
-          <span>✦ ${escapeHtml(t.exactModelId || t.responseModel)}${showTier ? ` (${escapeHtml(cleanTier)})` : ''}</span>
-          ${t.execModelId ? `<span class="font-normal opacity-80">→${escapeHtml(tHud('execModel'))}:${escapeHtml(t.execModelId)}</span>` : t.responseModel && t.responseModel !== '--' && t.responseModel !== t.exactModelId ? `<span class="font-normal opacity-75">(${escapeHtml(t.responseModel)})</span>` : ''}
-        </span>
-        ${t.sigKeyHex ? `
-          <span class="${PILL_CLS} ${t.fpStatus === 'CHANGED' ? 'text-amber-500 font-bold border-amber-500/40' : 'text-[var(--muted-foreground)]'} whitespace-nowrap"
-                title="${escapeHtml(tHud('sigTip', t.sigKeyHex, t.sessionID || '--'))}">
-            🔑 ${t.sigKeyHex.slice(0, 6)}
-          </span>
-        ` : ''}
-        <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tHud('speedTip'))}">${speedHtml}</span>
-        <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tHud('cacheTip'))}">${cacheHtml}</span>
-        <span class="${PILL_CLS} whitespace-nowrap" title="${escapeHtml(tHud('turnCtxTip'))}">
-          <span class="text-[var(--muted-foreground)]">${escapeHtml(tHud('ctxLabel'))}</span>
-          <strong class="${ctxTextClass}">${fmtNum(t.contextUsed || 0)}/${fmtNum(t.maxContext || 0)}</strong>
-          <span class="text-[var(--muted-foreground)]">(${t.contextPct}%)</span>
-          <span class="w-10 bg-[var(--card)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)] shrink-0 inline-block">
-            <span class="block ${ctxBarColor} h-full transition-all duration-300" style="width: ${Math.min(100, t.contextPct)}%"></span>
-          </span>
-        </span>
-        <span class="${PILL_CLS}" title="${escapeHtml(tokTip)}">
-          <span class="text-[var(--muted-foreground)]">📊 ${escapeHtml(tokTitle)}</span>
-          <strong class="text-indigo-600 dark:text-indigo-400">${fmtNum(curTok)}</strong>
-          <span class="text-[var(--muted-foreground)]">(${escapeHtml(inTag)}${fmtNum(curInTok)}/${escapeHtml(cacheTag)}${fmtCacheK(curCacheTok)}/${escapeHtml(outTag)}${fmtNum(curOutTok)})${totalTok > curTok ? ` · ${escapeHtml(totLbl)}${fmtNum(totalTok)}` : ''}</span>
-        </span>
-        ${formatCardQuotaPill(t)}
-      </div>
-    `;
-  }
-
   function isTodayLocal(ms) {
     if (!ms) return false;
     const d = new Date(ms);
@@ -231,7 +164,12 @@
   }
 
   function isTaskInProgress(t) {
-    return Boolean(t.isRunning || (t.runningBgCount || 0) > 0 || t.linkedCodex?.isRunning);
+    return Boolean(
+      t.isRunning ||
+        (t.runningBgCount || 0) > 0 ||
+        (t.subagentRunningCount || 0) > 0 ||
+        t.linkedCodex?.isRunning
+    );
   }
 
   function sortFleetInProgressFirst(list) {
@@ -240,11 +178,178 @@
       const bRun = isTaskInProgress(b) ? 1 : 0;
       if (aRun !== bRun) return bRun - aRun;
       if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
-      if ((a.runningBgCount || 0) !== (b.runningBgCount || 0)) {
-        return (b.runningBgCount || 0) - (a.runningBgCount || 0);
-      }
-      return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+      const aSubBg = (a.runningBgCount || 0) + (a.subagentRunningCount || 0);
+      const bSubBg = (b.runningBgCount || 0) + (b.subagentRunningCount || 0);
+      if (aSubBg !== bSubBg) return bSubBg - aSubBg;
+      return (b.activityMtimeMs || b.mtimeMs || 0) - (a.activityMtimeMs || a.mtimeMs || 0);
     });
+  }
+
+  function buildTaskCardHtml(t, data, isAllMode) {
+    const isCodex = t.engine === 'CODEX';
+    const runningBgList = (t.backgroundTasks || []).filter((b) => b.isRunning);
+    const nonDaemonBgList = runningBgList.filter((b) => !b.isDaemon);
+    const hasActiveNonDaemonBg = nonDaemonBgList.length > 0;
+    const st =
+      t.stateCode === 'SUB_RUNNING'
+        ? getStateStyle('BG_RUNNING', true)
+        : getStateStyle(t.stateCode, hasActiveNonDaemonBg || Boolean(t.linkedCodex?.isRunning));
+
+    const isRootSelected = window.selectedConvId === t.conversationId;
+    const selectedChild = !isRootSelected
+      ? (t.subagents || []).find((s) => s.conversationId === window.selectedConvId) || null
+      : null;
+    const isExpanded = isRootSelected || Boolean(selectedChild);
+    const activeRing = isRootSelected ? 'ring-2 ring-sky-500/60' : selectedChild ? 'ring-2 ring-purple-500/50' : '';
+    const dimCls = isAllMode && t.isDismissed ? 'opacity-60' : '';
+    const localizedState = trStateLabel(t.stateCode, t.stateLabel, t.runningBgCount);
+    const actMtime = t.activityMtimeMs || t.mtimeMs;
+
+    const runningStepIndicesJson = JSON.stringify(nonDaemonBgList.map((b) => b.stepIndex));
+    const headerBgStopBtn = hasActiveNonDaemonBg ? `
+      <button onclick="killBgTask(event, '${t.conversationId}', ${runningStepIndicesJson})"
+              class="text-[10px] leading-4 mono px-1.5 py-0.5 rounded border border-rose-500/40 bg-rose-500/12 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 font-semibold transition inline-flex items-center gap-1 whitespace-nowrap">
+        <span>🛑</span>
+        <span>${escapeHtml(nonDaemonBgList.length > 1 ? tHud('stopBgMulti', nonDaemonBgList.length) : tHud('stopBgSingle', nonDaemonBgList[0].taskId))}</span>
+      </button>
+    ` : '';
+
+    const diag = getDiagTagStyle(t.diagTag);
+    const showDiagBadge = t.diagTag && t.diagTag.code && t.diagTag.code !== 'HEALTHY';
+    const engineBadgeHtml = isCodex
+      ? `<span class="text-[10px] leading-4 mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30 shrink-0 whitespace-nowrap">🟢 Codex</span>`
+      : '';
+
+    const curAgg = t.currentTurn?.aggregate || HudMetrics.turnTotalsFallback(t.currentTurn);
+    const sessTotals = t.sessionTotals || {
+      inputTokens: 0,
+      cacheReadTokens: t.totalCacheReadTokens || 0,
+      outputTokens: t.totalOutputTokens || 0,
+      totalTokens: t.totalAllTokens || 0,
+      cacheHitRate: t.avgCacheHitRate ?? 0,
+      byModel: [],
+      quotaUsage: null,
+    };
+
+    const byModelDisplay = curAgg.byModel?.length > 0
+      ? curAgg.byModel
+      : sessTotals.byModel?.length > 0
+        ? sessTotals.byModel
+        : [{
+            modelKey: t.exactModelId || t.modelLabel,
+            modelLabel: t.modelLabel,
+            exactModelId: t.exactModelId || t.responseModel || '--',
+            quotaGroupKey: isCodex ? 'codex' : /claude|sonnet|opus|gpt/i.test(`${t.modelLabel} ${t.exactModelId}`) ? '3p' : 'gemini',
+            stepCount: t.stepCount || 0,
+            inputTokens: 0,
+            cacheReadTokens: t.cacheReadTokens || 0,
+            outputTokens: t.outputTokens || 0,
+            totalTokens: curAgg.totalTokens || t.totalAllTokens || 0,
+          }];
+
+    const detailTarget = selectedChild
+      ? { ...selectedChild, backgroundTasks: [], contextUsed: 0, maxContext: 256000, contextPct: 0 }
+      : t;
+    const inlineDetailHtml = isExpanded && typeof window.renderInlineDetailHtml === 'function'
+      ? window.renderInlineDetailHtml(detailTarget, data)
+      : '';
+
+    const subCount = (t.subagents || []).length;
+    const subRunCount = t.subagentRunningCount || 0;
+    const subTrayHtml = typeof window.renderSubagentTray === 'function' ? window.renderSubagentTray(t) : '';
+    const runningBgTrayHtml = renderBgTrayHtml(t, runningBgList);
+    const codexTrayHtml = isCodex
+      ? renderCodexProgressTray(t.conversationId, t.codexProgress, false, null)
+      : t.linkedCodex
+        ? renderCodexProgressTray(`linked:${t.conversationId}`, t.linkedCodex.progress, true, t.linkedCodex)
+        : '';
+
+    return `
+      <div class="space-y-0">
+        <div onclick="selectTaskForDrilldown('${t.conversationId}')"
+             class="task-card ${st.cardClass} ${activeRing} ${dimCls} rounded-xl p-2.5 cursor-pointer relative overflow-hidden">
+          <div class="absolute left-0 top-0 bottom-0 w-1 ${isCodex ? 'bg-emerald-500' : st.accentBar}"></div>
+          <div class="pl-2 space-y-2">
+            <!-- Header Bar -->
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                <span class="w-2 h-2 rounded-full ${st.dot} shrink-0"></span>
+                ${engineBadgeHtml}
+                <span class="text-xs sm:text-sm font-bold truncate text-[var(--foreground)]" title="${escapeHtml(t.title)}">
+                  ${escapeHtml(t.title)}
+                </span>
+              </div>
+              <div class="flex items-center gap-1 shrink-0 mono">
+                <span class="text-[10px] text-[var(--muted-foreground)] hidden sm:inline whitespace-nowrap mr-0.5">${fmtAgo(actMtime)}</span>
+                <span class="text-[10px] leading-4 px-1.5 py-0.5 rounded border border-[var(--hud-border)] bg-[var(--hud-subtle)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium whitespace-nowrap">
+                  ${escapeHtml(isRootSelected ? tHud('collapseBtn') : tHud('detailsBtn', t.totalTurnsCount || 0))}
+                </span>
+                <button onclick="jumpToConversation(event, '${t.conversationId}')"
+                        title="${escapeHtml(isCodex ? tHud('jumpCodexTip') : tHud('jumpAgyTip'))}"
+                        class="text-[11px] leading-4 px-1.5 py-0.5 rounded border border-transparent hover:border-[var(--hud-border)] hover:bg-[var(--hud-subtle)] ${isCodex ? 'text-emerald-600 dark:text-emerald-400' : 'text-sky-600 dark:text-sky-400'} font-semibold transition">↗</button>
+                ${isAllMode && t.isDismissed ? `
+                  <button onclick="restoreTask(event, '${t.conversationId}')"
+                          title="${escapeHtml(tHud('restoreBtnTip'))}"
+                          class="text-[10px] leading-4 px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 font-sans font-semibold transition">${escapeHtml(tHud('restoreBtn'))}</button>
+                ` : `
+                  <button onclick="dismissTask(event, '${t.conversationId}')"
+                          title="${escapeHtml(tHud('dismissBtnTip'))}"
+                          class="text-[11px] leading-4 px-1.5 py-0.5 rounded border border-transparent hover:border-rose-500/35 hover:bg-rose-500/10 text-[var(--muted-foreground)] hover:text-rose-500 transition">×</button>
+                `}
+              </div>
+            </div>
+
+            <!-- Status Strip -->
+            <div class="flex flex-wrap items-center gap-1.5 text-[10px] leading-4 mono">
+              <span class="font-bold px-1.5 py-0.2 rounded border ${st.badge} whitespace-nowrap">${escapeHtml(localizedState)}</span>
+              <span class="px-1.5 py-0.2 rounded border border-[var(--hud-border)] bg-[var(--hud-subtle)] text-[var(--muted-foreground)] whitespace-nowrap">${escapeHtml(t.workspaceLabel)}</span>
+              ${subCount > 0 ? `
+                <span class="px-1.5 py-0.2 rounded border ${subRunCount > 0 ? 'border-purple-500/40 bg-purple-500/12 text-purple-600 dark:text-purple-300 font-bold' : 'border-[var(--hud-border)] bg-[var(--hud-subtle)] text-[var(--muted-foreground)]'} whitespace-nowrap">${escapeHtml(tHud('subagentCountPill', subCount, subRunCount))}</span>
+              ` : ''}
+              ${showDiagBadge ? `
+                <span class="px-1.5 py-0.2 rounded border ${diag.cls} whitespace-nowrap" title="${escapeHtml(diag.detail)}">${escapeHtml(diag.label)}</span>
+              ` : ''}
+              ${t.fpStatus === 'CHANGED' ? `
+                <span class="px-1.5 py-0.2 rounded border border-amber-500/40 bg-amber-500/10 text-amber-500 font-bold whitespace-nowrap" title="${escapeHtml(tHud('sigTip', t.sigKeyHex, t.sessionID || '--'))}">🔑 ${escapeHtml((t.sigKeyHex || '').slice(0, 6))}</span>
+              ` : ''}
+              ${t.isSubagent ? `
+                <span class="px-1.5 py-0.2 rounded border border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400 font-semibold whitespace-nowrap">Sub</span>
+              ` : ''}
+              ${isAllMode && t.isDismissed ? `
+                <span class="px-1.5 py-0.2 rounded border border-[var(--hud-border)] bg-[var(--hud-subtle)] text-[var(--muted-foreground)] whitespace-nowrap">${escapeHtml(tHud('dismissedTag'))}</span>
+              ` : ''}
+              ${headerBgStopBtn}
+            </div>
+
+            <!-- Turn vs Total Comparison Grid -->
+            ${HudMetrics.renderTotalsGrid(curAgg, sessTotals, {
+              isCurrentRunning: t.isCurrentRunning,
+              isRunning: isTaskInProgress(t),
+              streamingTps: t.streamingTps,
+              effectiveTps: t.effectiveTps,
+              avgStreamingTps: t.avgStreamingTps,
+            })}
+
+            <!-- Turn Model Breakdown -->
+            ${HudMetrics.renderModelBreakdown(byModelDisplay, { title: tHud('modelsThisTurn') })}
+
+            <!-- Context Progress Bar -->
+            <div class="flex items-center gap-2 text-[10px] mono tabular-nums" title="${escapeHtml(tHud('turnCtxTip'))}">
+              <span class="text-[var(--muted-foreground)] shrink-0">${escapeHtml(tHud('ctxShort'))}</span>
+              <div class="flex-1 bg-[var(--hud-subtle)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)]">
+                <div class="${getCtxColor(t.contextPct)} h-full transition-all duration-300" style="width: ${Math.min(100, t.contextPct)}%"></div>
+              </div>
+              <span class="${getCtxTextColor(t.contextPct)} shrink-0">${HudMetrics.fmtCompactTok(t.contextUsed || 0)}/${HudMetrics.fmtCompactTok(t.maxContext || 0)} (${t.contextPct}%)</span>
+            </div>
+
+            ${subTrayHtml}
+            ${runningBgTrayHtml}
+            ${codexTrayHtml}
+          </div>
+        </div>
+        ${inlineDetailHtml}
+      </div>
+    `;
   }
 
   window.renderFleet = function (data) {
@@ -258,7 +363,12 @@
     const codexTasksList = sortFleetInProgressFirst(tasks.filter((t) => t.engine === 'CODEX'));
     const activeTasksList = sortFleetInProgressFirst(
       tasks.filter(
-        (t) => isTaskInProgress(t) || (!t.isArchived && isTodayLocal(t.mtimeMs) && !t.isSubagent)
+        (t) =>
+          isTaskInProgress(t) ||
+          (!t.isArchived &&
+            isTodayLocal(t.activityMtimeMs || t.mtimeMs) &&
+            !t.isDismissed &&
+            !isOptimisticDismissed(t))
       )
     );
 
@@ -317,10 +427,8 @@
       ov.fleetCombinedTps > 0 ? tHud('kpiSpeedSubLive', ov.fleetCombinedTps) : tHud('kpiSpeedSubAvg');
 
     const maxPct = ov.maxContextPct || 0;
-    const maxUsed = ov.maxContextUsed || 0;
-    const maxLim = ov.maxContextLimit || 0;
-    document.getElementById('kpiMaxCtx').textContent = maxLim > 0
-      ? `${fmtNum(maxUsed)} / ${fmtNum(maxLim)} (${maxPct}%)`
+    document.getElementById('kpiMaxCtx').textContent = (ov.maxContextLimit || 0) > 0
+      ? `${fmtNum(ov.maxContextUsed || 0)} / ${fmtNum(ov.maxContextLimit || 0)} (${maxPct}%)`
       : `${maxPct}%`;
     const maxSubEl = document.getElementById('kpiMaxCtxSub');
     if (maxSubEl) {
@@ -357,7 +465,12 @@
     }
 
     const mode = window.currentFilterMode || 'active';
-    const filtered = mode === 'active' ? activeTasksList : mode === 'codex' ? codexTasksList : sortFleetInProgressFirst(tasks);
+    const filtered = mode === 'active'
+      ? activeTasksList
+      : mode === 'codex'
+        ? codexTasksList
+        : sortFleetInProgressFirst(tasks);
+
     const container = document.getElementById('fleetTasksContainer');
     const savedScrollTops = new Map();
     container.querySelectorAll('[data-scroll-id]').forEach((el) => {
@@ -384,98 +497,7 @@
       return;
     }
 
-    container.innerHTML = filtered.map((t) => {
-      const isCodex = t.engine === 'CODEX';
-      const runningBgList = (t.backgroundTasks || []).filter((b) => b.isRunning);
-      const nonDaemonBgList = runningBgList.filter((b) => !b.isDaemon);
-      const hasRunningBg = runningBgList.length > 0;
-      const hasActiveNonDaemonBg = nonDaemonBgList.length > 0;
-      const st = getStateStyle(t.stateCode, hasActiveNonDaemonBg || Boolean(t.linkedCodex?.isRunning));
-      const isSelected = window.selectedConvId === t.conversationId;
-      const activeRing = isSelected ? 'ring-2 ring-sky-500/60' : '';
-      const localizedState = trStateLabel(t.stateCode, t.stateLabel, t.runningBgCount);
-
-      const runningStepIndicesJson = JSON.stringify(nonDaemonBgList.map((b) => b.stepIndex));
-      const headerBgStopBtn = hasActiveNonDaemonBg ? `
-        <button onclick="killBgTask(event, '${t.conversationId}', ${runningStepIndicesJson})"
-                class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md border border-rose-500/40 bg-rose-500/12 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 font-semibold transition inline-flex items-center gap-1 whitespace-nowrap">
-          <span>🛑</span>
-          <span>${escapeHtml(nonDaemonBgList.length > 1 ? tHud('stopBgMulti', nonDaemonBgList.length) : tHud('stopBgSingle', nonDaemonBgList[0].taskId))}</span>
-        </button>
-      ` : '';
-
-      const runningBgTrayHtml = renderBgTrayHtml(t, runningBgList);
-      const codexTrayHtml = isCodex
-        ? renderCodexProgressTray(t.conversationId, t.codexProgress, false, null)
-        : t.linkedCodex
-          ? renderCodexProgressTray(`linked:${t.conversationId}`, t.linkedCodex.progress, true, t.linkedCodex)
-          : '';
-
-      const diag = getDiagTagStyle(t.diagTag);
-      const engineBadgeHtml = isCodex
-        ? `<span class="text-[11px] leading-4 mono font-bold px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/35 shrink-0 whitespace-nowrap">🟢 Codex</span>`
-        : '';
-
-      const inlineDetailHtml = isSelected && typeof window.renderInlineDetailHtml === 'function'
-        ? window.renderInlineDetailHtml(t, data)
-        : '';
-
-      return `
-        <div class="space-y-0">
-          <div onclick="selectTaskForDrilldown('${t.conversationId}')"
-               class="task-card ${st.cardClass} ${activeRing} rounded-xl p-2.5 cursor-pointer relative overflow-hidden">
-            <div class="absolute left-0 top-0 bottom-0 w-1 ${isCodex ? 'bg-emerald-500' : st.accentBar}"></div>
-            <div class="pl-1.5 space-y-1.5">
-              <div class="flex items-center justify-between gap-2">
-                <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                  <span class="w-2 h-2 rounded-full ${st.dot} shrink-0"></span>
-                  ${engineBadgeHtml}
-                  <span class="text-xs sm:text-sm font-bold truncate text-[var(--foreground)]" title="${escapeHtml(t.title)}">
-                    ${escapeHtml(t.title)}
-                  </span>
-                </div>
-                <div class="flex items-center gap-1 shrink-0">
-                  <span class="text-[11px] mono text-[var(--muted-foreground)] hidden sm:inline whitespace-nowrap">${fmtAgo(t.mtimeMs)}</span>
-                  <span class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md metric-pill text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium whitespace-nowrap">
-                    ${escapeHtml(isSelected ? tHud('collapseBtn') : tHud('detailsBtn', t.totalTurnsCount || 0))}
-                  </span>
-                  <button onclick="jumpToConversation(event, '${t.conversationId}')"
-                          title="${escapeHtml(isCodex ? tHud('jumpCodexTip') : tHud('jumpAgyTip'))}"
-                          class="text-[11px] leading-4 mono px-2 py-0.5 rounded-md border ${isCodex ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25' : 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20'} font-semibold transition whitespace-nowrap">
-                    ${escapeHtml(isCodex ? tHud('jumpCodex') : tHud('jumpAgy'))}
-                  </button>
-                </div>
-              </div>
-
-              <div class="flex flex-wrap items-center gap-1.5 text-[11px] leading-4 mono">
-                <span class="font-bold px-2 py-0.5 rounded-md border ${st.badge} shrink-0 whitespace-nowrap">${escapeHtml(localizedState)}</span>
-                <span class="px-2 py-0.5 rounded-md border ${diag.cls} shrink-0 whitespace-nowrap" title="${escapeHtml(diag.detail)}">
-                  ${escapeHtml(diag.label)}
-                </span>
-                ${t.isRunning && hasRunningBg ? `
-                  <span class="${PILL_CLS} font-semibold text-violet-600 dark:text-violet-300 shrink-0 whitespace-nowrap">
-                    ${escapeHtml(tHud('bgPillCount', t.runningBgCount))}
-                  </span>
-                ` : ''}
-                <span class="${PILL_CLS} text-[var(--muted-foreground)] font-medium shrink-0 whitespace-nowrap">
-                  ${escapeHtml(t.workspaceLabel)}
-                </span>
-                <span class="text-[11px] mono text-[var(--muted-foreground)] sm:hidden whitespace-nowrap">${fmtAgo(t.mtimeMs)}</span>
-                ${t.isSubagent ? `
-                  <span class="${PILL_CLS} font-semibold text-purple-600 dark:text-purple-400 shrink-0 whitespace-nowrap">Sub</span>
-                ` : ''}
-                ${headerBgStopBtn}
-              </div>
-
-              ${renderTurnMetricPillsHtml(t, isCodex)}
-              ${runningBgTrayHtml}
-              ${codexTrayHtml}
-            </div>
-          </div>
-          ${inlineDetailHtml}
-        </div>
-      `;
-    }).join('');
+    container.innerHTML = filtered.map((t) => buildTaskCardHtml(t, data, mode === 'all')).join('');
 
     container.querySelectorAll('[data-scroll-id]').forEach((el) => {
       const id = el.getAttribute('data-scroll-id');

@@ -757,7 +757,6 @@
         ` : ''}
       `;
     }
-
     function getDiagTagStyle(diag) {
       if (!diag) return { cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 font-semibold', label: trDiagLabel(null), detail: '' };
       const label = trDiagLabel(diag);
@@ -788,7 +787,6 @@
         detail: diag.detail || '',
       };
     }
-
     function renderCodexProgressTray(convId, cp, isLinkedFromAgy = false, linkedMeta = null) {
       if (!cp) return '';
       const isTimelineOpen = openCodexTimelines.has(convId);
@@ -903,9 +901,11 @@
         </div>
       `;
     }
-
   </script>
   <script src="/ui_i18n.js"></script>
+  <script src="/ui_card_metrics.js"></script>
+  <script src="/ui_subagent_tray.js"></script>
+  <script src="/ui_turn_list.js"></script>
   <script src="/ui_inline_detail.js"></script>
   <script src="/ui_fleet_cards.js"></script>
   <script>

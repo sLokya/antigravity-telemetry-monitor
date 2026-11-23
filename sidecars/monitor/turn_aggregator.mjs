@@ -15,6 +15,24 @@ export function extractUserPromptPreview(rawContent, maxLen = 90) {
   return clean.length > maxLen ? `${clean.slice(0, maxLen - 1)}…` : clean;
 }
 
+const SYS_MSG_BOILERPLATE_RE =
+  /The following is a <SYSTEM_MESSAGE> not actually sent by the user\.\s*It is provided by the system as important information to pay attention to\./gi;
+
+export function buildWakeTurn(obj, idx, prevCreatedMs, prevWasSys, existingCount) {
+  if (!obj || obj.type !== 'SYSTEM_MESSAGE') return null;
+  const createdAtMs = obj.created_at ? Date.parse(obj.created_at) || 0 : 0;
+  const isNewWake =
+    existingCount === 0 ||
+    (!prevWasSys && prevCreatedMs > 0 && createdAtMs > 0 && createdAtMs - prevCreatedMs >= 20000);
+  if (!isNewWake) return null;
+  const stripped = String(obj.content || '').replace(SYS_MSG_BOILERPLATE_RE, '');
+  return {
+    stepIndex: obj.step_index ?? idx,
+    createdAtMs,
+    promptPreview: extractUserPromptPreview(stripped),
+  };
+}
+
 export function resolveQuotaGroupKey(engine, modelText) {
   if (engine === 'CODEX') return 'codex';
   return /claude|sonnet|opus|gpt/i.test(String(modelText || '')) ? '3p' : 'gemini';
@@ -37,10 +55,15 @@ function summarizeStepGroup(groupSteps, meta) {
   let hasCotCollapsed = false;
   let lastSubstantive = null;
 
+  const byModelMap = new Map();
+
   for (const s of groupSteps) {
-    inputTokens += s.inputTokens || 0;
-    cacheReadTokens += s.cacheReadTokens || 0;
-    outputTokens += s.outputTokens || 0;
+    const sIn = s.inputTokens || 0;
+    const sCache = s.cacheReadTokens || 0;
+    const sOut = s.outputTokens || 0;
+    inputTokens += sIn;
+    cacheReadTokens += sCache;
+    outputTokens += sOut;
     thinkingTokens += s.thinkingTokens || 0;
     responseTokens += s.responseTokens || 0;
     totalE2ESec += s.totalSec || 0;
@@ -51,12 +74,41 @@ function summarizeStepGroup(groupSteps, meta) {
     if (s.isCacheShock) hasCacheShock = true;
     if (s.isCotCollapsed) hasCotCollapsed = true;
 
+    const mExact = s.exactModelId || s.modelLabel || meta.fallbackExactModelId || '--';
+    const mLabel = s.modelLabel || mExact || meta.fallbackModelLabel || 'Auto';
+    const mKey = s.exactModelId || s.modelLabel || mExact;
+    let mRec = byModelMap.get(mKey);
+    if (!mRec) {
+      mRec = {
+        modelKey: mKey,
+        modelLabel: mLabel,
+        exactModelId: mExact,
+        quotaGroupKey: resolveQuotaGroupKey(
+          meta.engine,
+          `${mLabel} ${mExact} ${s.responseModel || ''}`
+        ),
+        stepCount: 0,
+        inputTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      };
+      byModelMap.set(mKey, mRec);
+    }
+    mRec.stepCount += 1;
+    mRec.inputTokens += sIn;
+    mRec.cacheReadTokens += sCache;
+    mRec.outputTokens += sOut;
+    mRec.totalTokens += sIn + sCache + sOut;
+
     if (!s.isBufferedFlush && (s.streamingTps || 0) > 0 && (s.activeGenSec || 0) > 0) {
-      substantiveOut += s.outputTokens || 0;
+      substantiveOut += sOut;
       substantiveSec += s.activeGenSec || 0;
       lastSubstantive = s;
     }
   }
+
+  const byModel = Array.from(byModelMap.values()).sort((a, b) => b.totalTokens - a.totalTokens);
 
   const latest = groupSteps.length > 0 ? groupSteps[groupSteps.length - 1] : null;
   const totalPromptTokens = inputTokens + cacheReadTokens;
@@ -117,6 +169,8 @@ function summarizeStepGroup(groupSteps, meta) {
       `${modelLabel} ${exactModelId} ${responseModel}`
     ),
     stepCount: groupSteps.length,
+    modelCount: byModel.length,
+    byModel,
     inputTokens,
     cacheReadTokens,
     outputTokens,
@@ -161,8 +215,13 @@ function computeCodexTurnQuota(startRl, endRl) {
   const weeklyUsedPct = calcBucket(startRl.secondary, endRl.secondary);
   if (fiveHourUsedPct === null && weeklyUsedPct === null) return null;
   return {
-    fiveHourUsedPct,
-    weeklyUsedPct,
+    byPool: {
+      codex: {
+        fiveHourUsedPct,
+        weeklyUsedPct,
+        isApproxConcurrent: false,
+      },
+    },
     isApproxConcurrent: false,
     source: 'codex_rollout',
   };
@@ -173,6 +232,8 @@ export function aggregateStepsToTurns({
   engine,
   steps = [],
   userTurns = [],
+  wakeTurns = [],
+  firstCreatedAtMs = 0,
   codexTurns = [],
   isConvRunning = false,
   fallbackModelLabel = 'Auto',
@@ -230,8 +291,10 @@ export function aggregateStepsToTurns({
     return turns;
   }
 
-  // Antigravity: map generatorMetadata steps to transcript USER_INPUT boundaries
-  const sortedUt = [...userTurns].sort((a, b) => a.stepIndex - b.stepIndex);
+  // Antigravity: map generatorMetadata steps to transcript USER_INPUT boundaries (or wake turns for subagents)
+  const isWakeSource = userTurns.length === 0 && wakeTurns.length > 0;
+  const boundaries = userTurns.length > 0 ? userTurns : wakeTurns;
+  const sortedUt = [...boundaries].sort((a, b) => a.stepIndex - b.stepIndex);
   if (sortedUt.length === 0) {
     if (steps.length > 0) {
       turns.push(
@@ -240,7 +303,7 @@ export function aggregateStepsToTurns({
           turnId: `${convId}:t-1`,
           turnNumber: 1,
           promptPreview: '会话轮次 #1',
-          startedAtMs: 0,
+          startedAtMs: firstCreatedAtMs || 0,
           completedAtMs: 0,
           isRunning: isConvRunning,
           isAborted: false,
@@ -285,7 +348,7 @@ export function aggregateStepsToTurns({
         engine,
         turnId: `${convId}:step:${b.ut.stepIndex}`,
         turnNumber: b.turnNumber,
-        promptPreview: b.ut.promptPreview || `轮次 #${b.turnNumber}`,
+        promptPreview: b.ut.promptPreview || `${isWakeSource ? '唤醒' : '轮次'} #${b.turnNumber}`,
         startedAtMs: b.ut.createdAtMs || 0,
         completedAtMs: isLast && isConvRunning ? 0 : nextUt?.createdAtMs || 0,
         isRunning: isLast && isConvRunning,
