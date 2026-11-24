@@ -1,8 +1,9 @@
 {
   "name": "agy-telemetry",
   "displayName": "Antigravity Telemetry — Model, Speed & Quota Monitor",
-  "version": "1.1.0",
-  "description": "Real-time sidecar HUD for Google Antigravity IDE & Codex: inspect actual routed models, Streaming & E2E Token/s (TPS), TTFT latency, KV cache hit size/rate, per-turn token & 5h/weekly quota tracking, and background task control.",
+  "version": "1.2.0",
+  "description": "Real-time sidecar HUD for Google Antigravity IDE & Codex: inspect actual routed models, Streaming & E2E Token/s (TPS), TTFT latency, KV cache hit size/rate, local token-weighted 5h/weekly quota estimation with solo calibration, shared-account family usage alert, background task control, and one-click plugin updater.",
+  "repository": "https://github.com/sLokya/antigravity-telemetry-monitor",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "打开实时模型、速度与配额监控面板 (Open Telemetry HUD)",

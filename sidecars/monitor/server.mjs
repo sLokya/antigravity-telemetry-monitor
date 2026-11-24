@@ -13,6 +13,7 @@ import { extractUserPromptPreview, buildWakeTurn, aggregateStepsToTurns, compute
 import { reconcileAndPersistHistory, getPersistedTurnsForConversation, getLocalQuotaEstimatesByConv } from './task_history_store.mjs';
 import { buildRootMap, finalizeFleet, preselect, finalSelect, dismissConversation, restoreConversation } from './fleet/index.mjs';
 import { cloneQuotaGroups, mergeCatalogQuotaFallback, pickLatestCodexQuota, updateFamilyQuotaTracker, updateQuotaCalibrationTracker, handleQuotaAction } from './quota/index.mjs';
+import { startBackgroundUpdateChecker, getPluginUpdateStatus, handleUpdaterAction } from './updater/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = homedir();
@@ -2632,6 +2633,7 @@ async function buildTelemetryPayload(requestedConvId) {
     },
     familyQuotaUsage,
     quotaCalibration,
+    pluginUpdate: getPluginUpdateStatus(),
     fingerprintLedger: {
       filePath: FINGERPRINT_LEDGER_FILE,
       updatedAtMs: fpLedger.updatedAtMs,
@@ -2684,6 +2686,8 @@ async function handleActionRequest(data) {
   const action = data?.action;
   const quotaRes = handleQuotaAction(data, Date.now());
   if (quotaRes) return quotaRes;
+  const updaterRes = await handleUpdaterAction(data);
+  if (updaterRes) return updaterRes;
 
   if (action === 'ack_fingerprint') {
     acknowledgeFingerprintChanges(data?.modelFamily || '');
@@ -2820,7 +2824,7 @@ const noCacheHeaders = {
   Pragma: 'no-cache',
 };
 
-const UI_SCRIPTS = ['ui_i18n.js', 'ui_card_metrics.js', 'ui_subagent_tray.js', 'ui_turn_list.js', 'ui_inline_detail.js', 'ui_quota_calibration.js', 'ui_fleet_cards.js'];
+const UI_SCRIPTS = ['ui_i18n.js', 'ui_card_metrics.js', 'ui_subagent_tray.js', 'ui_turn_list.js', 'ui_inline_detail.js', 'ui_quota_calibration.js', 'ui_updater.js', 'ui_fleet_cards.js'];
 
 function renderAssembledIndexHtml() {
   let html = readFileSync(join(__dirname, 'index.html'), 'utf-8');
@@ -2830,26 +2834,13 @@ function renderAssembledIndexHtml() {
   return html;
 }
 
-for (const p of ['/', '/index.html']) {
-  app.page(p, () => new Response(renderAssembledIndexHtml(), { contentType: 'text/html; charset=utf-8', headers: noCacheHeaders }));
-}
-for (const f of UI_SCRIPTS) {
-  app.page(`/${f}`, () => new Response(readFileSync(join(__dirname, f), 'utf-8'), { contentType: 'application/javascript; charset=utf-8', headers: noCacheHeaders }));
-}
-
-app.api('/api/telemetry', async (data) => {
-  return buildTelemetryPayload(data?.conversationId);
-}, 'POST');
-
-app.api('/api/telemetry', async (data) => {
-  return buildTelemetryPayload(data?.conversationId);
-}, 'GET');
-
-app.api('/api/action', async (data) => {
-  return handleActionRequest(data);
-}, 'POST');
-
+for (const p of ['/', '/index.html']) app.page(p, () => new Response(renderAssembledIndexHtml(), { contentType: 'text/html; charset=utf-8', headers: noCacheHeaders }));
+for (const f of UI_SCRIPTS) app.page(`/${f}`, () => new Response(readFileSync(join(__dirname, f), 'utf-8'), { contentType: 'application/javascript; charset=utf-8', headers: noCacheHeaders }));
+app.api('/api/telemetry', async (data) => buildTelemetryPayload(data?.conversationId), 'POST');
+app.api('/api/telemetry', async (data) => buildTelemetryPayload(data?.conversationId), 'GET');
+app.api('/api/action', async (data) => handleActionRequest(data), 'POST');
 app.run();
+startBackgroundUpdateChecker();
 
 // Background sampler so turn history & quota deltas stay tracked even when HUD pane is closed
 let bgSampleRunning = false;

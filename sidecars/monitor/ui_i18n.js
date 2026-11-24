@@ -66,6 +66,21 @@
       calibCurRate: '当前',
       calibActualShort: '实降',
       calibEstShort: '估算',
+      btnUpdTip: '检查或一键更新 agy-telemetry 插件',
+      updNewShort: '更新',
+      updReloadShort: '待重载',
+      updDrawerTitle: '插件版本与更新',
+      updCheckBtn: '检查更新',
+      updChecking: '检查中…',
+      updApplyBtn: '一键更新',
+      updApplying: '更新中…',
+      updDismissBtn: '暂不提示',
+      updDone: '操作完成',
+      updUpToDate: '当前已是最新版本',
+      updAvailLine: (v) => `发现可用更新：${v}`,
+      updCheckedAt: (ago) => `上次检查 ${ago}`,
+      updDirtyWarn: (n) => `检测到插件目录有 ${n} 处本地未提交改动，已禁用一键更新以防覆盖（请先 commit 或 stash）。`,
+      updNeedReloadBanner: '✅ 后端代码已更新落盘，请在 Antigravity 的 Customizations → Plugins 中关闭再重新开启 agy-telemetry 完成重载。',
       quota5hTitle: '5小时配额 · 账号余量',
       quota7dTitle: '周窗口配额 · 账号余量',
       quotaResetSoon: '即将刷新',
@@ -271,6 +286,21 @@
       calibCurRate: 'Rate',
       calibActualShort: 'Act',
       calibEstShort: 'Est',
+      btnUpdTip: 'Check for updates or update agy-telemetry in one click',
+      updNewShort: 'Update',
+      updReloadShort: 'Reload',
+      updDrawerTitle: 'Plugin Version & Updates',
+      updCheckBtn: 'Check Now',
+      updChecking: 'Checking…',
+      updApplyBtn: 'Update Now',
+      updApplying: 'Updating…',
+      updDismissBtn: 'Dismiss',
+      updDone: 'Done',
+      updUpToDate: 'You are up to date',
+      updAvailLine: (v) => `Update available: ${v}`,
+      updCheckedAt: (ago) => `Checked ${ago}`,
+      updDirtyWarn: (n) => `Detected ${n} local uncommitted change(s) in the plugin folder. One-click update is disabled to prevent overwriting (commit or stash first).`,
+      updNeedReloadBanner: '✅ Backend files updated. Toggle agy-telemetry off & on in Antigravity Customizations → Plugins to reload.',
       quota5hTitle: '5h Quota · Account',
       quota7dTitle: 'Weekly Quota · Account',
       quotaResetSoon: 'Resetting',
@@ -468,6 +498,8 @@
     set('quotaCalibBtnLabel', window.tHud('btnCalib'));
     const calibBtn = document.getElementById('quotaCalibBtn');
     if (calibBtn) calibBtn.title = window.tHud('btnCalibTip');
+    const updBtn = document.getElementById('pluginUpdateBtn');
+    if (updBtn) updBtn.title = window.tHud('btnUpdTip');
     set('refreshBtnLabel', window.tHud('btnRefresh'));
     set('langToggleLabel', window.tHud('btnLangLabel'));
     const langBtn = document.getElementById('langToggleBtn');
@@ -485,6 +517,7 @@
     if (window.lastPayload) {
       if (typeof window.renderFingerprintLedger === 'function') window.renderFingerprintLedger(window.lastPayload);
       if (typeof window.renderQuotaCalibration === 'function') window.renderQuotaCalibration(window.lastPayload);
+      if (typeof window.renderPluginUpdater === 'function') window.renderPluginUpdater(window.lastPayload);
       if (typeof window.renderFleet === 'function') window.renderFleet(window.lastPayload);
     }
   };

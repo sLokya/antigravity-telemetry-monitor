@@ -100,18 +100,12 @@
 </head>
 <body class="p-2 sm:p-2.5 select-none antialiased">
   <div class="max-w-4xl mx-auto space-y-2 sm:space-y-2.5">
-
-    <!-- Toast Feedback Banner -->
     <div id="actionToast" class="hidden text-xs mono px-3 py-2 rounded-xl border shadow-sm flex items-center justify-between transition-all">
       <span id="actionToastText" class="font-medium">--</span>
       <button onclick="document.getElementById('actionToast').classList.add('hidden')" class="text-xs opacity-70 hover:opacity-100 px-1">✕</button>
     </div>
-
-    <!-- 1. GLOBAL FLEET OVERVIEW CARD -->
     <div class="hud-card rounded-2xl overflow-hidden">
-      <!-- Top Shimmer Accent Line -->
       <div class="h-1 w-full accent-header-bar"></div>
-
       <div class="p-2 sm:p-3 space-y-2 sm:space-y-2.5">
         <!-- Header Bar -->
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -148,6 +142,7 @@
               <button id="quotaCalibBtn" type="button" aria-expanded="false" onclick="toggleQuotaCalibDrawer(event)" title="单人配额校准与估算偏高自检" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>⚖️</span><span id="quotaCalibBtnLabel">校准</span></button>
               <button id="fpLedgerBtn" type="button" onclick="toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🔑</span><span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span></button>
               <button id="langToggleBtn" type="button" onclick="toggleHudLang()" title="Switch language / 切换语言" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🌐</span><span id="langToggleLabel" class="mono font-semibold">EN</span></button>
+              <button id="pluginUpdateBtn" type="button" aria-expanded="false" onclick="togglePluginUpdateDrawer(event)" title="检查或更新插件" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:border-sky-500/50 hover:text-sky-500 font-medium mono transition flex items-center gap-1 whitespace-nowrap"><span>⬆️</span><span id="pluginUpdateBtnLabel">v1.2</span></button>
               <button id="refreshBtn" type="button" title="Refresh" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>↻</span><span id="refreshBtnLabel">刷新</span></button>
             </div>
           </div>
@@ -156,6 +151,7 @@
         <div id="quotaCalibAlert" class="hidden rounded-xl border border-amber-500/50 bg-amber-500/12 px-3 py-2 text-xs space-y-1.5"></div>
         <div id="fpLedgerDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-indigo-500/35"></div>
         <div id="quotaCalibDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-sky-500/35"></div>
+        <div id="pluginUpdateDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-emerald-500/35"></div>
 
         <!-- Quota Progress Bars Row -->
         <div class="quota-grid">
@@ -514,6 +510,7 @@
         window.lastPayload = data;
         renderFingerprintLedger(data);
         if (typeof renderQuotaCalibration === 'function') renderQuotaCalibration(data);
+        if (typeof renderPluginUpdater === 'function') renderPluginUpdater(data);
         renderFleet(data);
       } catch (err) {
         console.error('Telemetry fetch error:', err);
@@ -797,14 +794,13 @@
   <script src="/ui_turn_list.js"></script>
   <script src="/ui_inline_detail.js"></script>
   <script src="/ui_quota_calibration.js"></script>
+  <script src="/ui_updater.js"></script>
   <script src="/ui_fleet_cards.js"></script>
   <script>
     if (typeof window.applyStaticI18n === 'function') window.applyStaticI18n();
     const initScan = document.getElementById('initialScanningMsg');
     if (initScan && typeof window.tHud === 'function') initScan.textContent = window.tHud('scanning');
-    updateFilterButtonsUI();
-    fetchTelemetry();
-    setInterval(fetchTelemetry, 1500);
+    updateFilterButtonsUI(); fetchTelemetry(); setInterval(fetchTelemetry, 1500);
   </script>
 </body>
 </html>
