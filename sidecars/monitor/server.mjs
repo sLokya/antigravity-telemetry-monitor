@@ -10,8 +10,9 @@ import {
   loadFingerprintLedger, flushFingerprintLedger, recordModelFingerprint, acknowledgeFingerprintChanges,
 } from './fingerprint_ledger.mjs';
 import { extractUserPromptPreview, buildWakeTurn, aggregateStepsToTurns, computeConversationTurnMetrics } from './turn_aggregator.mjs';
-import { reconcileAndPersistHistory, getPersistedTurnsForConversation } from './task_history_store.mjs';
+import { reconcileAndPersistHistory, getPersistedTurnsForConversation, getLocalQuotaEstimatesByConv } from './task_history_store.mjs';
 import { buildRootMap, finalizeFleet, preselect, finalSelect, dismissConversation, restoreConversation } from './fleet/index.mjs';
+import { cloneQuotaGroups, mergeCatalogQuotaFallback, pickLatestCodexQuota, updateFamilyQuotaTracker, updateQuotaCalibrationTracker, handleQuotaAction } from './quota/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = homedir();
@@ -745,7 +746,7 @@ let cachedQuotaGroupsTime = 0;
 async function getUserQuotaGroups() {
   const now = Date.now();
   if (cachedQuotaGroups && now - cachedQuotaGroupsTime < 3000) {
-    return cachedQuotaGroups;
+    return cloneQuotaGroups(cachedQuotaGroups);
   }
   const result = {};
   try {
@@ -782,7 +783,7 @@ async function getUserQuotaGroups() {
   } catch {
     // fallback if RetrieveUserQuotaSummary fails
   }
-  return cachedQuotaGroups || result;
+  return cloneQuotaGroups(cachedQuotaGroups || result);
 }
 
 function resolveQuotaForModel(modelLabelOrId, catalogEntry, quotaGroups) {
@@ -1238,8 +1239,9 @@ async function getParsedConversationSteps(
 function resolveTaskWorkingState(convId, lsStatus, transcriptInfo, hookState, nowMs) {
   const isEngineRunning = lsStatus === 'CASCADE_RUN_STATUS_RUNNING';
 
-  // 1. Check live hook state first
-  if (hookState && hookState.conversationId === convId && nowMs - hookState.timestampMs < 90000) {
+  // 1. Check live hook state first (tighten fallback window if LS already reports IDLE)
+  const hookMaxAgeMs = isEngineRunning ? 90000 : 12000;
+  if (hookState && hookState.conversationId === convId && nowMs - hookState.timestampMs < hookMaxAgeMs) {
     if (hookState.eventType === 'PreInvocation') {
       const elapsed = ((nowMs - hookState.timestampMs) / 1000).toFixed(1);
       return {
@@ -1423,6 +1425,7 @@ function parseCodexRolloutCached(rawRolloutPath, threadId, defaultModel, default
     let prevTotalOutTokens = -1;
     let latestResponseId = '';
     let latestRateLimits = null;
+    let latestRateLimitsMs = 0;
     let compactionCount = 0;
     let streamErrorCount = 0;
     let rateLimitErrorCount = 0;
@@ -1526,8 +1529,6 @@ function parseCodexRolloutCached(rawRolloutPath, threadId, defaultModel, default
             startedAtMs: tsMs,
             completedAtMs: 0,
             isAborted: false,
-            startRateLimits: latestRateLimits,
-            endRateLimits: latestRateLimits,
           };
           pendingUserPrompt = '';
           codexTurns.push(activeTurnObj);
@@ -1646,10 +1647,7 @@ function parseCodexRolloutCached(rawRolloutPath, threadId, defaultModel, default
         } else if (evType === 'token_count' && p.info) {
           if (p.rate_limits) {
             latestRateLimits = p.rate_limits;
-            if (activeTurnObj) {
-              if (!activeTurnObj.startRateLimits) activeTurnObj.startRateLimits = p.rate_limits;
-              activeTurnObj.endRateLimits = p.rate_limits;
-            }
+            if (tsMs > latestRateLimitsMs) latestRateLimitsMs = tsMs;
           }
           const last = p.info.last_token_usage || {};
           const total = p.info.total_token_usage || {};
@@ -1795,6 +1793,7 @@ function parseCodexRolloutCached(rawRolloutPath, threadId, defaultModel, default
       lastEventKind,
       recentActions: recentActions.slice(-16),
       latestRateLimits,
+      latestRateLimitsMs,
       compactionCount,
       streamErrorCount,
       rateLimitErrorCount,
@@ -1847,10 +1846,10 @@ function readCodexBridgeActiveMap() {
 function getCodexFleetData(nowMs) {
   const codexTasks = [];
   const codexParsedMap = new Map();
-  let codexQuota = null;
+  const codexQuotaCandidates = [];
 
   if (!existsSync(CODEX_STATE_DB)) {
-    return { codexTasks, codexParsedMap, codexQuota };
+    return { codexTasks, codexParsedMap, codexQuota: null };
   }
 
   const bridgeActiveMap = readCodexBridgeActiveMap();
@@ -1897,7 +1896,7 @@ function getCodexFleetData(nowMs) {
       db.close();
     }
   } catch {
-    return { codexTasks, codexParsedMap, codexQuota };
+    return { codexTasks, codexParsedMap, codexQuota: null };
   }
 
   for (const row of rows) {
@@ -1910,27 +1909,11 @@ function getCodexFleetData(nowMs) {
       row.reasoning_effort || 'medium'
     );
 
-    if (rollout?.latestRateLimits && !codexQuota) {
-      const rl = rollout.latestRateLimits;
-      codexQuota = {
-        planType: rl.plan_type || 'plus',
-        fiveHour: rl.primary
-          ? {
-              remainingFraction: Math.max(0, (100 - (rl.primary.used_percent || 0)) / 100),
-              resetTime: rl.primary.resets_at
-                ? new Date(rl.primary.resets_at * 1000).toISOString()
-                : null,
-            }
-          : null,
-        weekly: rl.secondary
-          ? {
-              remainingFraction: Math.max(0, (100 - (rl.secondary.used_percent || 0)) / 100),
-              resetTime: rl.secondary.resets_at
-                ? new Date(rl.secondary.resets_at * 1000).toISOString()
-                : null,
-            }
-          : null,
-      };
+    if (rollout?.latestRateLimits) {
+      codexQuotaCandidates.push({
+        rateLimits: rollout.latestRateLimits,
+        observedAtMs: rollout.latestRateLimitsMs || rollout.lastRecordMs || 0,
+      });
     }
 
     const bridgeEntry = bridgeActiveMap[threadId] || null;
@@ -2131,6 +2114,7 @@ function getCodexFleetData(nowMs) {
     return b.mtimeMs - a.mtimeMs;
   });
 
+  const codexQuota = pickLatestCodexQuota(codexQuotaCandidates);
   return { codexTasks, codexParsedMap, codexQuota };
 }
 
@@ -2185,24 +2169,6 @@ async function navigateCodexDesktopThread(threadId) {
   });
 }
 
-function mergeCatalogQuotaIntoGroups(modelCatalog, quotaGroups) {
-  for (const entry of modelCatalog.values()) {
-    if (typeof entry.remainingFraction !== 'number' || !entry.resetTime) continue;
-    const is3p = /claude|sonnet|opus|gpt/i.test(String(entry.label || entry.modelId || ''));
-    const grp = quotaGroups?.[is3p ? '3p' : 'gemini'];
-    if (!grp) continue;
-    if (grp.fiveHour?.resetTime === entry.resetTime) {
-      if (entry.remainingFraction < (grp.fiveHour.remainingFraction ?? 1)) {
-        grp.fiveHour.remainingFraction = entry.remainingFraction;
-      }
-    } else if (grp.weekly?.resetTime === entry.resetTime) {
-      if (entry.remainingFraction < (grp.weekly.remainingFraction ?? 1)) {
-        grp.weekly.remainingFraction = entry.remainingFraction;
-      }
-    }
-  }
-}
-
 let lastTelemetryCallMs = 0;
 
 async function buildTelemetryPayload(requestedConvId) {
@@ -2212,7 +2178,7 @@ async function buildTelemetryPayload(requestedConvId) {
     getModelCatalogMap(),
     getUserQuotaGroups(),
   ]);
-  mergeCatalogQuotaIntoGroups(modelCatalog, quotaGroups);
+  mergeCatalogQuotaFallback(modelCatalog, quotaGroups);
   const selectedModelEnum = getSelectedModelFromState();
   const selectedModelInfo = modelCatalog.get(selectedModelEnum) || null;
   const hookState = readLiveHookState();
@@ -2526,8 +2492,13 @@ async function buildTelemetryPayload(requestedConvId) {
   // Combine AGY tasks + top 12 Codex tasks into unified fleetTasks list
   const combinedFleet = [...fleetTasks, ...codexTasks.slice(0, 12)];
 
-  // Reconcile per-turn history & incremental 5h/weekly quota usage
-  reconcileAndPersistHistory({ fleetTasks: combinedFleet, quotaGroups, nowMs });
+  // Reconcile per-turn history & local token-weighted quota estimates
+  reconcileAndPersistHistory({ fleetTasks: combinedFleet, nowMs });
+
+  // Track unexplained account quota drops & solo calibration window
+  const localConvEstimates = getLocalQuotaEstimatesByConv();
+  const familyQuotaUsage = updateFamilyQuotaTracker({ quotaGroups, codexQuota, localConvEstimates, nowMs });
+  const quotaCalibration = updateQuotaCalibrationTracker({ quotaGroups, codexQuota, localConvEstimates, nowMs });
 
   // Nest subagents/swarm workers into roots, merge totals, and apply dismiss state
   const { roots, byId } = finalizeFleet({ tasks: combinedFleet, rootMap, nowMs });
@@ -2538,27 +2509,6 @@ async function buildTelemetryPayload(requestedConvId) {
   const runningTasksCount = combinedFleet.filter((t) => t.isRunning).length;
   const runningCodexCount = codexTasks.filter((t) => t.isRunning).length;
   const runningBgTasksCount = fleetTasks.reduce((acc, t) => acc + (t.runningBgCount || 0), 0);
-  const tasksWithSpeed = combinedFleet.filter((t) => t.avgStreamingTps > 0 || t.streamingTps > 0);
-  const runningWithSpeed = tasksWithSpeed.filter((t) => t.isRunning);
-  const fleetCombinedTps = +runningWithSpeed
-    .reduce((acc, t) => acc + (t.streamingTps || t.avgStreamingTps), 0)
-    .toFixed(1);
-  const fleetAvgTps =
-    runningWithSpeed.length > 0
-      ? +(
-          runningWithSpeed.reduce((acc, t) => acc + (t.streamingTps || t.avgStreamingTps), 0) /
-          runningWithSpeed.length
-        ).toFixed(1)
-      : tasksWithSpeed.length > 0
-        ? +(
-            tasksWithSpeed.reduce((acc, t) => acc + (t.avgStreamingTps || t.streamingTps), 0) /
-            tasksWithSpeed.length
-          ).toFixed(1)
-        : 0;
-  const maxContextTask = combinedFleet.reduce(
-    (best, t) => (!best || t.contextPct > best.contextPct ? t : best),
-    null
-  );
 
   const activeConvId =
     requestedConvId && requestedConvId !== 'auto'
@@ -2679,13 +2629,9 @@ async function buildTelemetryPayload(requestedConvId) {
       runningBgTasksCount,
       totalTrackedTasks: roots.length,
       totalCodexTasks: codexTasks.length,
-      fleetCombinedTps,
-      fleetAvgTps,
-      maxContextPct: maxContextTask?.contextPct || 0,
-      maxContextUsed: maxContextTask?.contextUsed || 0,
-      maxContextLimit: maxContextTask?.maxContext || 0,
-      maxContextTitle: maxContextTask?.workspaceLabel || '--',
     },
+    familyQuotaUsage,
+    quotaCalibration,
     fingerprintLedger: {
       filePath: FINGERPRINT_LEDGER_FILE,
       updatedAtMs: fpLedger.updatedAtMs,
@@ -2736,6 +2682,9 @@ async function buildTelemetryPayload(requestedConvId) {
 
 async function handleActionRequest(data) {
   const action = data?.action;
+  const quotaRes = handleQuotaAction(data, Date.now());
+  if (quotaRes) return quotaRes;
+
   if (action === 'ack_fingerprint') {
     acknowledgeFingerprintChanges(data?.modelFamily || '');
     return {
@@ -2871,7 +2820,7 @@ const noCacheHeaders = {
   Pragma: 'no-cache',
 };
 
-const UI_SCRIPTS = ['ui_i18n.js', 'ui_card_metrics.js', 'ui_subagent_tray.js', 'ui_turn_list.js', 'ui_inline_detail.js', 'ui_fleet_cards.js'];
+const UI_SCRIPTS = ['ui_i18n.js', 'ui_card_metrics.js', 'ui_subagent_tray.js', 'ui_turn_list.js', 'ui_inline_detail.js', 'ui_quota_calibration.js', 'ui_fleet_cards.js'];
 
 function renderAssembledIndexHtml() {
   let html = readFileSync(join(__dirname, 'index.html'), 'utf-8');

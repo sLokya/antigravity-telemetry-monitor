@@ -1,5 +1,73 @@
 (function () {
+  const CODEX_FILTER_KEY = 'agy_telemetry_show_codex';
   const optimisticDismissMap = new Map(); // convId -> { atMs, actMs }
+
+  window.showCodexTasks = (() => {
+    try {
+      return localStorage.getItem(CODEX_FILTER_KEY) === '1';
+    } catch {
+      return false;
+    }
+  })();
+
+  function setShowCodex(next) {
+    window.showCodexTasks = Boolean(next);
+    try {
+      localStorage.setItem(CODEX_FILTER_KEY, window.showCodexTasks ? '1' : '0');
+    } catch {}
+    if (!window.showCodexTasks && String(window.selectedConvId || '').startsWith('codex:')) {
+      window.selectedConvId = null;
+    }
+    window.updateFilterButtonsUI();
+    if (window.lastPayload) window.renderFleet(window.lastPayload);
+  }
+
+  window.updateFilterButtonsUI = function () {
+    const filterRunBtn = document.getElementById('filterRunBtn');
+    const filterAllBtn = document.getElementById('filterAllBtn');
+    const filterCodexBtn = document.getElementById('filterCodexBtn');
+    const mode = window.currentFilterMode === 'all' ? 'all' : 'active';
+    const showCodex = Boolean(window.showCodexTasks);
+    const activeCls = 'text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap';
+    const inactiveCls = 'text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap';
+    const codexOnCls = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-emerald-500 bg-emerald-600 text-white font-semibold shadow-sm transition inline-flex items-center gap-1 whitespace-nowrap';
+    const codexOffCls = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-emerald-500/50 font-medium transition inline-flex items-center gap-1 whitespace-nowrap';
+
+    if (filterRunBtn) {
+      filterRunBtn.className = mode === 'active' ? activeCls : inactiveCls;
+      filterRunBtn.setAttribute('aria-pressed', String(mode === 'active'));
+    }
+    if (filterAllBtn) {
+      filterAllBtn.className = mode === 'all' ? activeCls : inactiveCls;
+      filterAllBtn.setAttribute('aria-pressed', String(mode === 'all'));
+    }
+    if (filterCodexBtn) {
+      filterCodexBtn.className = showCodex ? codexOnCls : codexOffCls;
+      filterCodexBtn.setAttribute('aria-pressed', String(showCodex));
+    }
+  };
+
+  window.switchToAllFilter = function () {
+    window.currentFilterMode = 'all';
+    window.updateFilterButtonsUI();
+    if (window.lastPayload) window.renderFleet(window.lastPayload);
+  };
+
+  window.enableCodexFilter = function () {
+    setShowCodex(true);
+  };
+
+  document.getElementById('filterRunBtn')?.addEventListener('click', () => {
+    window.currentFilterMode = 'active';
+    window.updateFilterButtonsUI();
+    if (window.lastPayload) window.renderFleet(window.lastPayload);
+  });
+  document.getElementById('filterAllBtn')?.addEventListener('click', () => {
+    window.switchToAllFilter();
+  });
+  document.getElementById('filterCodexBtn')?.addEventListener('click', () => {
+    setShowCodex(!window.showCodexTasks);
+  });
 
   window.dismissTask = async function (event, convId) {
     event.stopPropagation();
@@ -31,6 +99,21 @@
     try {
       const res = await callActionApi({ action: 'restore_task', conversationId: convId });
       showToast(res.ok ? tHud('restoreToast') : res.error || 'Error', !res.ok);
+      await fetchTelemetry();
+    } catch (err) {
+      showToast(String(err?.message || err), true);
+    }
+  };
+
+  window.resetFamilyQuota = async function (event) {
+    event.stopPropagation();
+    if (window.lastPayload) {
+      window.lastPayload.familyQuotaUsage = null;
+      window.renderFleet(window.lastPayload);
+    }
+    try {
+      const res = await callActionApi({ action: 'reset_family_quota' });
+      showToast(res.ok ? tHud('familyQuotaResetToast') : res.error || 'Error', !res.ok);
       await fetchTelemetry();
     } catch (err) {
       showToast(String(err?.message || err), true);
@@ -324,7 +407,7 @@
             <!-- Turn vs Total Comparison Grid -->
             ${HudMetrics.renderTotalsGrid(curAgg, sessTotals, {
               isCurrentRunning: t.isCurrentRunning,
-              isRunning: isTaskInProgress(t),
+              isRunning: Boolean(t.isRunning || (t.subagentRunningCount || 0) > 0),
               streamingTps: t.streamingTps,
               effectiveTps: t.effectiveTps,
               avgStreamingTps: t.avgStreamingTps,
@@ -352,31 +435,63 @@
     `;
   }
 
+  function buildFamilyQuotaCardHtml(familyQuotaUsage) {
+    if (!familyQuotaUsage || !familyQuotaUsage.active || !familyQuotaUsage.byPool) return '';
+    const scopedByPool = familyQuotaUsage.byPool;
+    if (Object.keys(scopedByPool).length === 0) return '';
+
+    const hasActiveGap = Object.values(scopedByPool).some((b) => b?.confidence === 'active_gap');
+    const chipsHtml = HudMetrics.renderQuotaChips({ ...familyQuotaUsage, byPool: scopedByPool }, { isRunning: false, compact: false });
+    return `
+      <div class="task-card rounded-xl px-2.5 py-2 relative overflow-hidden border-amber-500/40 bg-amber-500/[0.04]">
+        <div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-500"></div>
+        <div class="pl-2 space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+              <span class="text-xs font-bold truncate text-[var(--foreground)]">${escapeHtml(tHud('familyQuotaTitle'))}</span>
+            </div>
+            <div class="flex items-center gap-0.5 shrink-0">
+              ${hasActiveGap ? `<button type="button" onclick="openQuotaCalibDrawer(event)" title="${escapeHtml(tHud('familyQuotaCalibTip'))}" class="text-[11px] leading-4 px-1 py-0.5 rounded border border-transparent hover:border-amber-500/40 hover:bg-amber-500/10 text-[var(--muted-foreground)] hover:text-amber-600 transition">⚖️</button>` : ''}
+              <button type="button" onclick="resetFamilyQuota(event)" title="${escapeHtml(tHud('familyQuotaResetTip'))}" class="text-[11px] leading-4 px-1.5 py-0.5 rounded border border-transparent hover:border-rose-500/35 hover:bg-rose-500/10 text-[var(--muted-foreground)] hover:text-rose-500 transition">×</button>
+            </div>
+          </div>
+          <div>${chipsHtml}</div>
+        </div>
+      </div>
+    `;
+  }
+
   window.renderFleet = function (data) {
     const ov = data.fleetOverview || {};
     const selModel = data.selectedModel || {};
     const tasks = data.fleetTasks || [];
 
+    const mode = window.currentFilterMode === 'all' ? 'all' : 'active';
+    const showCodex = Boolean(window.showCodexTasks);
+    const isActiveTask = (t) =>
+      isTaskInProgress(t) ||
+      (!t.isArchived &&
+        isTodayLocal(t.activityMtimeMs || t.mtimeMs) &&
+        !t.isDismissed &&
+        !isOptimisticDismissed(t));
+
     const runCount = ov.runningTasksCount || 0;
     const runCodexCount = ov.runningCodexCount || 0;
     const bgCount = ov.runningBgTasksCount || 0;
-    const codexTasksList = sortFleetInProgressFirst(tasks.filter((t) => t.engine === 'CODEX'));
-    const activeTasksList = sortFleetInProgressFirst(
-      tasks.filter(
-        (t) =>
-          isTaskInProgress(t) ||
-          (!t.isArchived &&
-            isTodayLocal(t.activityMtimeMs || t.mtimeMs) &&
-            !t.isDismissed &&
-            !isOptimisticDismissed(t))
-      )
-    );
+    const allCodexList = tasks.filter((t) => t.engine === 'CODEX');
+    const activeCodexList = allCodexList.filter(isActiveTask);
+    const scopedTasks = showCodex ? tasks : tasks.filter((t) => t.engine !== 'CODEX');
+    const activeTasksList = sortFleetInProgressFirst(scopedTasks.filter(isActiveTask));
+    const allTasksList = sortFleetInProgressFirst(scopedTasks);
+    const codexBadgeCount = mode === 'active' ? activeCodexList.length : allCodexList.length;
 
     document.getElementById('filterRunCount').textContent = `(${activeTasksList.length})`;
-    if (document.getElementById('filterCodexCount')) {
-      document.getElementById('filterCodexCount').textContent = `(${codexTasksList.length})`;
+    const filterCodexCountEl = document.getElementById('filterCodexCount');
+    if (filterCodexCountEl) {
+      filterCodexCountEl.textContent = `(${codexBadgeCount})`;
     }
-    document.getElementById('filterAllCount').textContent = `(${tasks.length})`;
+    document.getElementById('filterAllCount').textContent = `(${allTasksList.length})`;
 
     const fleetBadge = document.getElementById('fleetRunningBadge');
     const fleetCodexBadge = document.getElementById('fleetCodexBadge');
@@ -392,8 +507,8 @@
       if (runCodexCount > 0) {
         fleetCodexBadge.textContent = tHud('codexRunningBadge', runCodexCount);
         fleetCodexBadge.classList.remove('hidden');
-      } else if (codexTasksList.length > 0) {
-        fleetCodexBadge.textContent = tHud('codexSessionsBadge', codexTasksList.length);
+      } else if (allCodexList.length > 0) {
+        fleetCodexBadge.textContent = tHud('codexSessionsBadge', allCodexList.length);
         fleetCodexBadge.classList.remove('hidden');
       } else {
         fleetCodexBadge.classList.add('hidden');
@@ -410,33 +525,6 @@
     fleetDot.className = (runCount > 0 || bgCount > 0 || runCodexCount > 0)
       ? 'w-2.5 h-2.5 rounded-full bg-sky-500 pulse-live shrink-0 ring-4 ring-sky-500/15'
       : 'w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 ring-4 ring-emerald-500/15';
-
-    document.getElementById('kpiTasks').textContent =
-      runCodexCount > 0
-        ? tHud('kpiTasksActiveCodex', runCount, runCodexCount, bgCount)
-        : tHud('kpiTasksFgBg', runCount, bgCount);
-    document.getElementById('kpiTasksSub').textContent =
-      runCodexCount > 0
-        ? tHud('kpiTasksSubCodex', runCodexCount)
-        : bgCount > 0
-          ? tHud('kpiTasksSubBg', bgCount)
-          : tHud('kpiTasksSubTotal', tasks.length, codexTasksList.length);
-
-    document.getElementById('kpiFleetTps').textContent = `${ov.fleetAvgTps || 0}`;
-    document.getElementById('kpiFleetTpsSub').textContent =
-      ov.fleetCombinedTps > 0 ? tHud('kpiSpeedSubLive', ov.fleetCombinedTps) : tHud('kpiSpeedSubAvg');
-
-    const maxPct = ov.maxContextPct || 0;
-    document.getElementById('kpiMaxCtx').textContent = (ov.maxContextLimit || 0) > 0
-      ? `${fmtNum(ov.maxContextUsed || 0)} / ${fmtNum(ov.maxContextLimit || 0)} (${maxPct}%)`
-      : `${maxPct}%`;
-    const maxSubEl = document.getElementById('kpiMaxCtxSub');
-    if (maxSubEl) {
-      maxSubEl.textContent = tHud('kpiCtxSub', ov.maxContextTitle || '--');
-    }
-    const maxBar = document.getElementById('kpiMaxCtxBar');
-    maxBar.className = `${getCtxColor(maxPct)} h-full transition-all duration-300`;
-    maxBar.style.width = `${Math.min(100, maxPct)}%`;
 
     const qg = data.quotaGroups || {};
     const cq = data.codexQuota || qg.codex || null;
@@ -464,12 +552,7 @@
       ].join('');
     }
 
-    const mode = window.currentFilterMode || 'active';
-    const filtered = mode === 'active'
-      ? activeTasksList
-      : mode === 'codex'
-        ? codexTasksList
-        : sortFleetInProgressFirst(tasks);
+    const filtered = mode === 'active' ? activeTasksList : allTasksList;
 
     const container = document.getElementById('fleetTasksContainer');
     const savedScrollTops = new Map();
@@ -477,27 +560,33 @@
       savedScrollTops.set(el.getAttribute('data-scroll-id'), el.scrollTop);
     });
 
+    const familyCardHtml = buildFamilyQuotaCardHtml(data.familyQuotaUsage);
+
     if (filtered.length === 0) {
-      container.innerHTML = `
+      const emptyTitle = mode === 'all' ? tHud('emptyAllTitle') : tHud('emptyRecentTitle');
+      container.innerHTML = `${familyCardHtml}
         <div class="kpi-tile rounded-xl p-5 text-center space-y-2">
-          <div class="text-xs font-semibold text-[var(--foreground)]">${escapeHtml(tHud('emptyRecentTitle'))}</div>
+          <div class="text-xs font-semibold text-[var(--foreground)]">${escapeHtml(emptyTitle)}</div>
           <div class="text-[11px] text-[var(--muted-foreground)]">${escapeHtml(tHud('emptyRecentSub'))}</div>
           <div class="flex items-center justify-center gap-2 pt-1">
-            ${codexTasksList.length > 0 ? `
-              <button onclick="switchToCodexFilter()" class="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-lg border border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-semibold transition">
-                ${escapeHtml(tHud('emptyCodexBtn', codexTasksList.length))}
+            ${!showCodex && codexBadgeCount > 0 ? `
+              <button onclick="enableCodexFilter()" class="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-lg border border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-semibold transition">
+                ${escapeHtml(tHud('emptyCodexBtn', codexBadgeCount))}
               </button>
             ` : ''}
-            <button onclick="switchToAllFilter()" class="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 font-medium transition">
-              ${escapeHtml(tHud('emptyAllBtn', tasks.length))}
-            </button>
+            ${mode === 'active' && allTasksList.length > 0 ? `
+              <button onclick="switchToAllFilter()" class="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 font-medium transition">
+                ${escapeHtml(tHud('emptyAllBtn', allTasksList.length))}
+              </button>
+            ` : ''}
           </div>
         </div>
       `;
       return;
     }
 
-    container.innerHTML = filtered.map((t) => buildTaskCardHtml(t, data, mode === 'all')).join('');
+    container.innerHTML =
+      familyCardHtml + filtered.map((t) => buildTaskCardHtml(t, data, mode === 'all')).join('');
 
     container.querySelectorAll('[data-scroll-id]').forEach((el) => {
       const id = el.getAttribute('data-scroll-id');

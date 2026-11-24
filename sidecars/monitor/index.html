@@ -73,11 +73,6 @@
       background: linear-gradient(135deg, rgba(99, 102, 241, 0.07) 0%, rgba(14, 165, 233, 0.04) 100%);
       border: 1px solid rgba(99, 102, 241, 0.28);
     }
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.5rem;
-    }
     .quota-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -92,13 +87,6 @@
       }
     }
     @media (max-width: 499px) {
-      .kpi-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.375rem;
-      }
-      .kpi-grid > .kpi-span-wide {
-        grid-column: span 2;
-      }
       .quota-grid {
         gap: 0.375rem;
       }
@@ -106,14 +94,6 @@
     @media (max-width: 359px) {
       .quota-grid {
         grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    @media (max-width: 339px) {
-      .kpi-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-      .kpi-grid > .kpi-span-wide {
-        grid-column: span 1;
       }
     }
   </style>
@@ -151,77 +131,31 @@
             </span>
           </div>
 
-          <!-- Segmented Filter Pill + Utilities -->
+          <!-- Segmented Filter Pill + Codex Toggle + Utilities -->
           <div class="flex flex-wrap items-center gap-1.5 max-w-full">
             <div class="inline-flex flex-wrap items-center p-0.5 rounded-lg bg-[var(--background)] border border-[var(--hud-border)] max-w-full">
-              <button id="filterRunBtn" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap">
+              <button id="filterRunBtn" type="button" aria-pressed="true" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap">
                 <span id="filterRunLabel">最近活跃</span> <span id="filterRunCount" class="mono opacity-90">(0)</span>
               </button>
-              <button id="filterCodexBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
-                <span id="filterCodexLabel">🟢 Codex</span> <span id="filterCodexCount" class="mono opacity-75">(0)</span>
-              </button>
-              <button id="filterAllBtn" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
+              <button id="filterAllBtn" type="button" aria-pressed="false" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
                 <span id="filterAllLabel">全部</span> <span id="filterAllCount" class="mono opacity-75">(0)</span>
               </button>
             </div>
+            <button id="filterCodexBtn" type="button" aria-pressed="false" title="切换是否在当前视图（最近活跃 / 全部）中显示 Codex 对话" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-emerald-500/50 font-medium transition inline-flex items-center gap-1 whitespace-nowrap">
+              <span id="filterCodexLabel">🟢 Codex</span> <span id="filterCodexCount" class="mono opacity-80">(0)</span>
+            </button>
             <div class="inline-flex items-center gap-1.5">
-              <button id="fpLedgerBtn" onclick="toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
-                <span>🔑</span> <span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span>
-              </button>
-              <button id="langToggleBtn" onclick="toggleHudLang()" title="Switch language / 切换语言" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
-                <span>🌐</span> <span id="langToggleLabel" class="mono font-semibold">EN</span>
-              </button>
-              <button id="refreshBtn" title="Refresh" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap">
-                <span>↻</span> <span id="refreshBtnLabel">刷新</span>
-              </button>
+              <button id="quotaCalibBtn" type="button" aria-expanded="false" onclick="toggleQuotaCalibDrawer(event)" title="单人配额校准与估算偏高自检" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>⚖️</span><span id="quotaCalibBtnLabel">校准</span></button>
+              <button id="fpLedgerBtn" type="button" onclick="toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🔑</span><span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span></button>
+              <button id="langToggleBtn" type="button" onclick="toggleHudLang()" title="Switch language / 切换语言" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🌐</span><span id="langToggleLabel" class="mono font-semibold">EN</span></button>
+              <button id="refreshBtn" type="button" title="Refresh" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>↻</span><span id="refreshBtnLabel">刷新</span></button>
             </div>
           </div>
         </div>
-
-        <!-- Fingerprint Change Alert Banner -->
         <div id="fpAlertBanner" class="hidden rounded-xl border border-rose-500/50 bg-rose-500/12 px-3 py-2 text-xs"></div>
-
-        <!-- Collapsible Local Fingerprint Baseline & Change Ledger Drawer -->
+        <div id="quotaCalibAlert" class="hidden rounded-xl border border-amber-500/50 bg-amber-500/12 px-3 py-2 text-xs space-y-1.5"></div>
         <div id="fpLedgerDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-indigo-500/35"></div>
-
-        <!-- Bento KPI Grid: 3 Core Runtime Tiles -->
-        <div class="kpi-grid">
-          <!-- Tile 1: Active / Background Tasks -->
-          <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
-            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span class="truncate whitespace-nowrap"><span id="kpiRuntimeLabel">运行态</span><span id="kpiRuntimeSubBracket" class="hidden sm:inline"> (前台 / 后台)</span></span>
-              <span class="w-5 h-5 rounded-md bg-sky-500/10 text-sky-500 flex items-center justify-center text-xs font-bold shrink-0">⚡</span>
-            </div>
-            <div id="kpiTasks" class="text-sm sm:text-base font-extrabold mono mt-1 tracking-tight whitespace-nowrap truncate">-- / --</div>
-            <div id="kpiTasksSub" class="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">--</div>
-          </div>
-
-          <!-- Tile 2: Effective Fleet TPS -->
-          <div class="kpi-tile rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
-            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span id="kpiSpeedLabel" class="truncate whitespace-nowrap">实时速度</span>
-              <span class="w-5 h-5 rounded-md bg-emerald-500/10 text-emerald-500 flex items-center justify-center text-xs font-bold shrink-0">🚀</span>
-            </div>
-            <div class="flex items-baseline gap-1 mt-1 whitespace-nowrap">
-              <span id="kpiFleetTps" class="text-sm sm:text-base font-extrabold mono text-emerald-600 dark:text-emerald-400">--</span>
-              <span class="text-[11px] mono text-[var(--muted-foreground)]">tok/s</span>
-            </div>
-            <div id="kpiFleetTpsSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">--</div>
-          </div>
-
-          <!-- Tile 3: Peak Context Size -->
-          <div class="kpi-tile kpi-span-wide rounded-xl p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
-            <div class="flex items-center justify-between gap-1 text-[11px] text-[var(--muted-foreground)] font-medium">
-              <span id="kpiMaxCtxLabel" class="truncate whitespace-nowrap">最高上下文大小</span>
-              <span class="w-5 h-5 rounded-md bg-amber-500/10 text-amber-500 flex items-center justify-center text-xs font-bold shrink-0">📊</span>
-            </div>
-            <div id="kpiMaxCtx" class="text-sm sm:text-base font-extrabold mono text-amber-600 dark:text-amber-400 mt-1 truncate">-- / -- (--%)</div>
-            <div class="w-full bg-[var(--card)] h-1.5 rounded-full overflow-hidden border border-[var(--hud-border)] mt-1">
-              <div id="kpiMaxCtxBar" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
-            </div>
-            <div id="kpiMaxCtxSub" class="text-[11px] text-[var(--muted-foreground)] mono truncate mt-0.5">--</div>
-          </div>
-        </div>
+        <div id="quotaCalibDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-sky-500/35"></div>
 
         <!-- Quota Progress Bars Row -->
         <div class="quota-grid">
@@ -265,11 +199,8 @@
 
   <script>
     const refreshBtn = document.getElementById('refreshBtn');
-    const filterAllBtn = document.getElementById('filterAllBtn');
-    const filterRunBtn = document.getElementById('filterRunBtn');
-    const filterCodexBtn = document.getElementById('filterCodexBtn');
 
-    // Default to Active/Background view ("首先默认看活跃"): 'active' | 'codex' | 'all'
+    // View state: 'active' | 'all' (+ independent window.showCodexTasks toggle managed in ui_fleet_cards.js)
     window.selectedConvId = null;
     window.currentFilterMode = 'active';
     window.lastPayload = null;
@@ -279,17 +210,6 @@
     const openBgLogs = window.openBgLogs;
     // Track open Codex progress timeline drawers: Set of convId
     const openCodexTimelines = new Set();
-
-    function updateFilterButtonsUI() {
-      const activeCls = 'text-xs px-2.5 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition';
-      const codexActiveCls = 'text-xs px-2.5 py-1 rounded-md bg-emerald-600 text-white font-semibold shadow-sm transition';
-      const inactiveCls = 'text-xs px-2.5 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition';
-      filterRunBtn.className = window.currentFilterMode === 'active' ? activeCls : inactiveCls;
-      if (filterCodexBtn) {
-        filterCodexBtn.className = window.currentFilterMode === 'codex' ? codexActiveCls : inactiveCls;
-      }
-      filterAllBtn.className = window.currentFilterMode === 'all' ? activeCls : inactiveCls;
-    }
 
     function showToast(msg, isError = false) {
       const toast = document.getElementById('actionToast');
@@ -313,38 +233,6 @@
     }
 
     refreshBtn.addEventListener('click', () => reloadWithCacheBust());
-
-    filterAllBtn.addEventListener('click', () => {
-      window.currentFilterMode = 'all';
-      updateFilterButtonsUI();
-      if (window.lastPayload) renderFleet(window.lastPayload);
-    });
-
-    if (filterCodexBtn) {
-      filterCodexBtn.addEventListener('click', () => {
-        window.currentFilterMode = 'codex';
-        updateFilterButtonsUI();
-        if (window.lastPayload) renderFleet(window.lastPayload);
-      });
-    }
-
-    filterRunBtn.addEventListener('click', () => {
-      window.currentFilterMode = 'active';
-      updateFilterButtonsUI();
-      if (window.lastPayload) renderFleet(window.lastPayload);
-    });
-
-    window.switchToAllFilter = function() {
-      window.currentFilterMode = 'all';
-      updateFilterButtonsUI();
-      if (window.lastPayload) renderFleet(window.lastPayload);
-    };
-
-    window.switchToCodexFilter = function() {
-      window.currentFilterMode = 'codex';
-      updateFilterButtonsUI();
-      if (window.lastPayload) renderFleet(window.lastPayload);
-    };
 
     window.selectTaskForDrilldown = function(convId) {
       if (window.selectedConvId === convId) {
@@ -625,6 +513,7 @@
         }
         window.lastPayload = data;
         renderFingerprintLedger(data);
+        if (typeof renderQuotaCalibration === 'function') renderQuotaCalibration(data);
         renderFleet(data);
       } catch (err) {
         console.error('Telemetry fetch error:', err);
@@ -907,6 +796,7 @@
   <script src="/ui_subagent_tray.js"></script>
   <script src="/ui_turn_list.js"></script>
   <script src="/ui_inline_detail.js"></script>
+  <script src="/ui_quota_calibration.js"></script>
   <script src="/ui_fleet_cards.js"></script>
   <script>
     if (typeof window.applyStaticI18n === 'function') window.applyStaticI18n();

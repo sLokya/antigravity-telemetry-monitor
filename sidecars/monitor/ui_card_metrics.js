@@ -59,7 +59,9 @@
       [pk]: {
         fiveHourUsedPct: f5 ?? null,
         weeklyUsedPct: fw ?? null,
+        weightedTokens: quotaUsage.weightedTokens || 0,
         isApproxConcurrent: Boolean(quotaUsage.isApproxConcurrent),
+        isEstimated: Boolean(quotaUsage.isEstimated || quotaUsage.source === 'local_token_estimate'),
       },
     };
   }
@@ -72,33 +74,48 @@
 
     if (entries.length === 0) {
       if (isRunning) {
-        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[10px] leading-tight mono font-medium" title="${escapeHtml(tHud('quotaWaitTip'))}">${escapeHtml(tHud('quotaSyncing'))}</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[10px] leading-tight mono font-medium" title="${escapeHtml(tHud('quotaWaitTip'))}">${escapeHtml(tHud('quotaPending'))}</span>`;
       }
       return `<span class="text-[10px] mono text-[var(--muted-foreground)]" title="${escapeHtml(tHud('quotaNoneTip'))}">${escapeHtml(tHud('quotaUnobserved'))}</span>`;
     }
+
+    const rootEst = Boolean(quotaUsage?.isEstimated || quotaUsage?.source === 'local_token_estimate');
+    const isFamilyGap = quotaUsage?.source === 'family_quota_gap';
 
     return `<div class="flex flex-wrap items-center gap-1">${entries
       .map(([pk, b]) => {
         const meta = poolMeta(pk);
         const u5 = b?.fiveHourUsedPct;
         const uw = b?.weeklyUsedPct;
-        const approx = b?.isApproxConcurrent ? '~' : '';
+        const isEst = Boolean(b?.isEstimated || rootEst);
+        const approx = isEst || b?.isApproxConcurrent ? '~' : '';
+        const wTokStr = b?.weightedTokens > 0 ? fmtCompactTok(b.weightedTokens) : '';
         const bothZero = (u5 === 0 || u5 === null || u5 === undefined) && (uw === 0 || uw === null || uw === undefined);
+        const tip = isFamilyGap
+          ? tHud(
+              'familyQuotaChipTip',
+              b?.actualDrop5hPct ?? 0,
+              b?.localEst5hPct ?? 0,
+              b?.actualDropWeeklyPct ?? 0,
+              b?.localEstWeeklyPct ?? 0,
+              b?.confidence || 'active_gap'
+            )
+          : isEst
+            ? tHud('quotaEstimatedTip', wTokStr)
+            : b?.isApproxConcurrent
+              ? tHud('quotaConcurrentTip')
+              : tHud('quotaRecordedTip');
 
         if (bothZero) {
-          const text = isRunning
-            ? tHud('quotaSyncing')
-            : compact
-              ? `5h ${tHud('quotaBelowMin')}`
-              : `5h ${tHud('quotaBelowMin')} · ${tHud('quotaWeek')} ${tHud('quotaBelowMin')}`;
-          const tip = isRunning ? tHud('quotaWaitTip') : tHud('quotaRecordedTip');
+          const text = compact
+            ? `5h ${approx}${tHud('quotaBelowMin')}`
+            : `5h ${approx}${tHud('quotaBelowMin')} · ${tHud('quotaWeek')} ${approx}${tHud('quotaBelowMin')}`;
           return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] leading-tight mono tabular-nums ${meta.chipCls}" title="${escapeHtml(`${meta.label}: ${tip}`)}"><span>${meta.icon}</span><span>${escapeHtml(text)}</span></span>`;
         }
 
         const parts = [];
         if (u5 !== null && u5 !== undefined) parts.push(`5h ${approx}-${u5}%`);
         if (uw !== null && uw !== undefined) parts.push(`${tHud('quotaWeek')} ${approx}-${uw}%`);
-        const tip = b?.isApproxConcurrent ? tHud('quotaConcurrentTip') : tHud('quotaRecordedTip');
         return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] leading-tight mono font-semibold tabular-nums ${meta.chipCls}" title="${escapeHtml(`${meta.label}: ${tip}`)}"><span>${meta.icon}</span><span>${escapeHtml(parts.join(' · '))}</span></span>`;
       })
       .join('')}</div>`;

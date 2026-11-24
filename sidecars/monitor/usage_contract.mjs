@@ -12,10 +12,15 @@ function normalizePoolBucket(b) {
   const fw = typeof b.weeklyUsedPct === 'number' && Number.isFinite(b.weeklyUsedPct)
     ? b.weeklyUsedPct
     : null;
+  const wt = typeof b.weightedTokens === 'number' && Number.isFinite(b.weightedTokens)
+    ? b.weightedTokens
+    : 0;
   return {
     fiveHourUsedPct: f5,
     weeklyUsedPct: fw,
+    weightedTokens: wt,
     isApproxConcurrent: Boolean(b.isApproxConcurrent),
+    isEstimated: Boolean(b.isEstimated),
   };
 }
 
@@ -25,17 +30,21 @@ export function normalizeQuotaUsage(q, fallbackPool = 'gemini') {
   if (q.byPool && typeof q.byPool === 'object') {
     const byPool = {};
     let anyApprox = Boolean(q.isApproxConcurrent);
+    let anyEst = Boolean(q.isEstimated || q.source === 'local_token_estimate');
     for (const key of Object.keys(q.byPool)) {
       const bucket = normalizePoolBucket(q.byPool[key]);
       if (bucket) {
+        if (anyEst) bucket.isEstimated = true;
         byPool[key] = bucket;
         if (bucket.isApproxConcurrent) anyApprox = true;
+        if (bucket.isEstimated) anyEst = true;
       }
     }
     return {
       byPool,
       isApproxConcurrent: anyApprox,
-      source: q.source || 'live_snapshot',
+      isEstimated: anyEst,
+      source: q.source || 'local_token_estimate',
     };
   }
 
@@ -56,17 +65,21 @@ export function normalizeQuotaUsage(q, fallbackPool = 'gemini') {
         ? fallbackPool
         : 'gemini';
   const approx = Boolean(q.isApproxConcurrent);
+  const est = Boolean(q.isEstimated || q.source === 'local_token_estimate');
 
   return {
     byPool: {
       [targetPool]: {
         fiveHourUsedPct: f5,
         weeklyUsedPct: fw,
+        weightedTokens: typeof q.weightedTokens === 'number' ? q.weightedTokens : 0,
         isApproxConcurrent: approx,
+        isEstimated: est,
       },
     },
     isApproxConcurrent: approx,
-    source: q.source || 'live_snapshot',
+    isEstimated: est,
+    source: q.source || 'local_token_estimate',
   };
 }
 
@@ -78,7 +91,8 @@ function cloneQuotaUsage(q) {
   return {
     byPool,
     isApproxConcurrent: Boolean(q.isApproxConcurrent),
-    source: q.source || 'live_snapshot',
+    isEstimated: Boolean(q.isEstimated || q.source === 'local_token_estimate'),
+    source: q.source || 'local_token_estimate',
   };
 }
 
@@ -97,6 +111,7 @@ export function mergeQuotaUsage(a, b) {
   ]);
 
   let anyApprox = Boolean(na.isApproxConcurrent || nb.isApproxConcurrent);
+  let anyEst = Boolean(na.isEstimated || nb.isEstimated);
   for (const pool of keys) {
     const pa = na.byPool?.[pool];
     const pb = nb.byPool?.[pool];
@@ -104,11 +119,13 @@ export function mergeQuotaUsage(a, b) {
     if (!pa) {
       byPool[pool] = { ...pb };
       if (pb.isApproxConcurrent) anyApprox = true;
+      if (pb.isEstimated) anyEst = true;
       continue;
     }
     if (!pb) {
       byPool[pool] = { ...pa };
       if (pa.isApproxConcurrent) anyApprox = true;
+      if (pa.isEstimated) anyEst = true;
       continue;
     }
     const fiveHourUsedPct =
@@ -119,14 +136,18 @@ export function mergeQuotaUsage(a, b) {
       pa.weeklyUsedPct === null && pb.weeklyUsedPct === null
         ? null
         : round2((pa.weeklyUsedPct ?? 0) + (pb.weeklyUsedPct ?? 0));
+    const weightedTokens = Math.round((pa.weightedTokens || 0) + (pb.weightedTokens || 0));
     const isApproxConcurrent = Boolean(pa.isApproxConcurrent || pb.isApproxConcurrent);
+    const isEstimated = Boolean(pa.isEstimated || pb.isEstimated);
     if (isApproxConcurrent) anyApprox = true;
-    byPool[pool] = { fiveHourUsedPct, weeklyUsedPct, isApproxConcurrent };
+    if (isEstimated) anyEst = true;
+    byPool[pool] = { fiveHourUsedPct, weeklyUsedPct, weightedTokens, isApproxConcurrent, isEstimated };
   }
 
   return {
     byPool,
     isApproxConcurrent: anyApprox,
+    isEstimated: anyEst,
     source: na.source === nb.source ? na.source : 'merged',
   };
 }
@@ -259,19 +280,4 @@ export function addTotals(...list) {
   acc.byModel = Array.from(modelMap.values()).sort((a, b) => b.totalTokens - a.totalTokens);
   acc.quotaUsage = quota;
   return acc;
-}
-
-export function poolTokensFromTurn(turn) {
-  const out = {};
-  if (!turn || typeof turn !== 'object') return out;
-  if (Array.isArray(turn.byModel) && turn.byModel.length > 0) {
-    for (const m of turn.byModel) {
-      const k = m.quotaGroupKey || turn.quotaGroupKey || 'gemini';
-      out[k] = (out[k] || 0) + (m.totalTokens || 0);
-    }
-    return out;
-  }
-  const k = turn.quotaGroupKey || 'gemini';
-  out[k] = turn.totalTokens || 0;
-  return out;
 }

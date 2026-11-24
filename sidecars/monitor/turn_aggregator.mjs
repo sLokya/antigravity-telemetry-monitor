@@ -1,3 +1,5 @@
+import { estimateQuotaFromByModel } from './quota/index.mjs';
+
 export function extractUserPromptPreview(rawContent, maxLen = 90) {
   if (!rawContent) return '';
   let text = String(rawContent);
@@ -152,6 +154,20 @@ function summarizeStepGroup(groupSteps, meta) {
     isCacheShock: Boolean(s.isCacheShock),
   }));
 
+  const quotaGroupKey = resolveQuotaGroupKey(
+    meta.engine,
+    `${modelLabel} ${exactModelId} ${responseModel}`
+  );
+  const quotaUsage = estimateQuotaFromByModel(byModel, {
+    exactModelId,
+    modelLabel,
+    quotaGroupKey,
+    inputTokens,
+    cacheReadTokens,
+    outputTokens,
+    totalTokens,
+  });
+
   return {
     turnId: meta.turnId,
     turnNumber: meta.turnNumber,
@@ -164,10 +180,7 @@ function summarizeStepGroup(groupSteps, meta) {
     exactModelId,
     responseModel,
     apiProvider: latest?.apiProvider || (meta.engine === 'CODEX' ? 'OPENAI_CODEX' : '--'),
-    quotaGroupKey: resolveQuotaGroupKey(
-      meta.engine,
-      `${modelLabel} ${exactModelId} ${responseModel}`
-    ),
+    quotaGroupKey,
     stepCount: groupSteps.length,
     modelCount: byModel.length,
     byModel,
@@ -190,40 +203,8 @@ function summarizeStepGroup(groupSteps, meta) {
     hasRouteMismatch,
     hasCacheShock,
     hasCotCollapsed,
-    quotaUsage: meta.quotaUsage || null,
+    quotaUsage,
     steps: compactSteps,
-  };
-}
-
-function computeCodexTurnQuota(startRl, endRl) {
-  if (!startRl || !endRl) return null;
-  const calcBucket = (startB, endB) => {
-    if (!startB || !endB) return null;
-    if (
-      typeof startB.used_percent !== 'number' ||
-      typeof endB.used_percent !== 'number'
-    ) {
-      return null;
-    }
-    if (startB.resets_at && endB.resets_at && startB.resets_at !== endB.resets_at) {
-      return null;
-    }
-    if (endB.used_percent < startB.used_percent) return null;
-    return +(endB.used_percent - startB.used_percent).toFixed(2);
-  };
-  const fiveHourUsedPct = calcBucket(startRl.primary, endRl.primary);
-  const weeklyUsedPct = calcBucket(startRl.secondary, endRl.secondary);
-  if (fiveHourUsedPct === null && weeklyUsedPct === null) return null;
-  return {
-    byPool: {
-      codex: {
-        fiveHourUsedPct,
-        weeklyUsedPct,
-        isApproxConcurrent: false,
-      },
-    },
-    isApproxConcurrent: false,
-    source: 'codex_rollout',
   };
 }
 
@@ -257,8 +238,6 @@ export function aggregateStepsToTurns({
             startedAtMs: 0,
             completedAtMs: 0,
             isAborted: false,
-            startRateLimits: null,
-            endRateLimits: null,
           },
           steps: [],
         });
@@ -271,7 +250,6 @@ export function aggregateStepsToTurns({
       const [turnIdx, bucket] = sortedEntries[i];
       const isLast = i === sortedEntries.length - 1;
       const m = bucket.meta;
-      const quotaUsage = computeCodexTurnQuota(m.startRateLimits, m.endRateLimits);
       turns.push(
         summarizeStepGroup(bucket.steps, {
           engine,
@@ -282,7 +260,6 @@ export function aggregateStepsToTurns({
           completedAtMs: m.completedAtMs || 0,
           isRunning: isLast && isConvRunning,
           isAborted: Boolean(m.isAborted),
-          quotaUsage,
           fallbackModelLabel,
           fallbackExactModelId,
         })

@@ -1,13 +1,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import {
-  normalizeQuotaUsage,
-  emptyTotals,
-  turnToTotals,
-  addTotals,
-  poolTokensFromTurn,
-} from './usage_contract.mjs';
+import { emptyTotals, turnToTotals, addTotals } from './usage_contract.mjs';
+import { estimateTurnQuotaUsage, estimateTotalsQuotaUsage } from './quota/index.mjs';
 
 const HOME = homedir();
 const SCRATCH_DIR = join(HOME, '.gemini', 'antigravity', 'scratch');
@@ -20,7 +15,6 @@ const FLUSH_INTERVAL_MS = 3000;
 let inMemoryStore = null;
 let storeDirty = false;
 let lastFlushMs = 0;
-const lastPoolSnapshots = new Map(); // poolKey -> { pct5h, reset5h, pctWeek, resetWeek, atMs }
 
 function loadStore() {
   if (inMemoryStore) return inMemoryStore;
@@ -29,7 +23,7 @@ function loadStore() {
       const parsed = JSON.parse(readFileSync(TASK_HISTORY_FILE, 'utf-8'));
       if (parsed && typeof parsed === 'object' && parsed.conversations) {
         inMemoryStore = {
-          version: 1,
+          version: 2,
           updatedAtMs: parsed.updatedAtMs || Date.now(),
           conversations: parsed.conversations,
         };
@@ -40,7 +34,7 @@ function loadStore() {
     // fallback to fresh store
   }
   inMemoryStore = {
-    version: 1,
+    version: 2,
     updatedAtMs: Date.now(),
     conversations: {},
   };
@@ -76,112 +70,32 @@ export function flushTaskHistory(force = false) {
   }
 }
 
-function readPoolState(quotaGroups, poolKey) {
-  const grp = quotaGroups?.[poolKey];
-  if (!grp) return null;
-  const f5 = grp.fiveHour?.remainingFraction;
-  const fw = grp.weekly?.remainingFraction;
-  return {
-    pct5h: typeof f5 === 'number' ? +(f5 * 100).toFixed(3) : null,
-    reset5h: grp.fiveHour?.resetTime || null,
-    pctWeek: typeof fw === 'number' ? +(fw * 100).toFixed(3) : null,
-    resetWeek: grp.weekly?.resetTime || null,
-  };
-}
-
-function migrateQuotaTrack(qt, fallbackPool = 'gemini') {
-  if (!qt || typeof qt !== 'object') return null;
-  if (qt.pools && typeof qt.pools === 'object') return qt;
-  const pool = fallbackPool || 'gemini';
-  const hasLegacyVals =
-    (qt.accum5hUsed || 0) !== 0 ||
-    (qt.accumWeekUsed || 0) !== 0 ||
-    Boolean(qt.isApproxConcurrent) ||
-    (qt.lastAttributedTokens || 0) !== 0;
-  const pools = hasLegacyVals
-    ? {
-        [pool]: {
-          accum5hUsed: qt.accum5hUsed || 0,
-          accumWeekUsed: qt.accumWeekUsed || 0,
-          isApproxConcurrent: Boolean(qt.isApproxConcurrent),
-          lastAttributedTokens: qt.lastAttributedTokens || 0,
-        },
-      }
-    : {};
-  delete qt.accum5hUsed;
-  delete qt.accumWeekUsed;
-  delete qt.isApproxConcurrent;
-  delete qt.lastAttributedTokens;
-  qt.pools = pools;
-  return qt;
-}
-
-function sumQuotaTrackAccum(qt) {
-  let sum5h = 0;
-  let sumWeek = 0;
-  for (const p of Object.values(qt?.pools || {})) {
-    sum5h += p?.accum5hUsed || 0;
-    sumWeek += p?.accumWeekUsed || 0;
-  }
-  return { sum5h, sumWeek };
-}
-
-function toPublicQuotaUsage(track, nativeQuota, fallbackPool = 'gemini') {
-  if (nativeQuota && nativeQuota.source === 'codex_rollout') {
-    return normalizeQuotaUsage(nativeQuota, 'codex');
-  }
-  const normTrack = migrateQuotaTrack(
-    track && typeof track === 'object' ? { ...track, pools: track.pools ? { ...track.pools } : undefined } : null,
-    fallbackPool
-  );
-  if (!normTrack || !normTrack.observedLive) {
-    return null;
-  }
-  const byPool = {};
-  let anyApprox = false;
-  const entries = Object.entries(normTrack.pools || {});
-  if (entries.length === 0) {
-    const pk = fallbackPool || 'gemini';
-    byPool[pk] = {
-      fiveHourUsedPct: 0,
-      weeklyUsedPct: 0,
-      isApproxConcurrent: false,
-    };
-  } else {
-    for (const [pk, p] of entries) {
-      const approx = Boolean(p?.isApproxConcurrent);
-      if (approx) anyApprox = true;
-      byPool[pk] = {
-        fiveHourUsedPct: +(p?.accum5hUsed || 0).toFixed(2),
-        weeklyUsedPct: +(p?.accumWeekUsed || 0).toFixed(2),
-        isApproxConcurrent: approx,
-      };
-    }
-  }
-  return {
-    byPool,
-    isApproxConcurrent: anyApprox,
-    source: 'live_snapshot',
-  };
-}
-
 function stripHeavyStepsForArchive(turn) {
-  const { steps, ...rest } = turn;
+  const { steps, quotaTrack: _dropTrack, ...rest } = turn;
   return {
     ...rest,
     steps: Array.isArray(steps) ? steps.slice(-25) : [],
   };
 }
 
-export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, nowMs = Date.now() }) {
-  const store = loadStore();
-  const liveTurnRefsByPool = new Map([
-    ['gemini', []],
-    ['3p', []],
-    ['codex', []],
-  ]);
+function toPublicTurn(t) {
+  const { quotaTrack: _dropTrack, ...cleanTurn } = t;
+  return {
+    ...cleanTurn,
+    quotaUsage: estimateTurnQuotaUsage(cleanTurn),
+  };
+}
 
-  // 1. Merge incoming live turns with persisted history per conversation
+function toPublicPrunedTotals(prunedTotals) {
+  if (!prunedTotals || typeof prunedTotals !== 'object') return null;
+  const cloned = addTotals(prunedTotals);
+  cloned.quotaUsage = estimateTotalsQuotaUsage(cloned);
+  return cloned;
+}
+
+export function reconcileAndPersistHistory({ fleetTasks = [], nowMs = Date.now() }) {
+  const store = loadStore();
+
   for (const task of fleetTasks) {
     const cid = task.conversationId;
     if (!cid) continue;
@@ -200,6 +114,7 @@ export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, 
         turns: [],
       };
       store.conversations[cid] = convRec;
+      storeDirty = true;
     } else {
       convRec.title = task.title || convRec.title;
       convRec.engine = task.engine || convRec.engine;
@@ -225,69 +140,12 @@ export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, 
 
     for (let tIdx = 0; tIdx < incomingTurns.length; tIdx++) {
       const inc = incomingTurns[tIdx];
-      const isLastTurn = tIdx === incomingTurns.length - 1;
       const prev = existingMap.get(inc.turnId);
-      const isJustFinishedTurn =
-        isLastTurn && inc.completedAtMs && nowMs - inc.completedAtMs < 15000;
-      let quotaTrack = prev?.quotaTrack || null;
-      const incPoolToks = poolTokensFromTurn(inc);
-
-      if (!quotaTrack) {
-        const shouldTrackLive = Boolean(inc.isRunning || isJustFinishedTurn);
-        const pools = {};
-        for (const [pk, tok] of Object.entries(incPoolToks)) {
-          pools[pk] = {
-            accum5hUsed: 0,
-            accumWeekUsed: 0,
-            isApproxConcurrent: false,
-            lastAttributedTokens: inc.isRunning ? tok || 0 : 0,
-          };
-        }
-        quotaTrack = {
-          observedLive: shouldTrackLive,
-          firstObservedMs: nowMs,
-          completedObservedMs: inc.isRunning ? 0 : nowMs,
-          pools,
-        };
-        storeDirty = true;
-      } else {
-        if (!quotaTrack.pools || typeof quotaTrack.pools !== 'object') {
-          migrateQuotaTrack(quotaTrack, prev?.quotaGroupKey || inc.quotaGroupKey || 'gemini');
-          storeDirty = true;
-        }
-        const { sum5h, sumWeek } = sumQuotaTrackAccum(quotaTrack);
-        // Auto-heal historical already-finished turns falsely tagged live before turn-level fix
-        if (
-          quotaTrack.observedLive &&
-          !inc.isRunning &&
-          quotaTrack.firstObservedMs === quotaTrack.completedObservedMs &&
-          sum5h === 0 &&
-          sumWeek === 0
-        ) {
-          quotaTrack.observedLive = false;
-          storeDirty = true;
-        }
-        if (!inc.isRunning && !quotaTrack.completedObservedMs) {
-          quotaTrack.completedObservedMs = nowMs;
-          storeDirty = true;
-        }
-        if (inc.isRunning && quotaTrack.completedObservedMs) {
-          quotaTrack.completedObservedMs = 0;
-          quotaTrack.observedLive = true;
-          storeDirty = true;
-        }
-      }
-
-      // Preserve Codex native rate_limits delta if previously recorded
-      const rawNativeQuota = inc.quotaUsage?.source === 'codex_rollout'
-        ? inc.quotaUsage
-        : prev?.quotaUsage?.source === 'codex_rollout'
-          ? prev.quotaUsage
-          : null;
-      const nativeQuota = rawNativeQuota ? normalizeQuotaUsage(rawNativeQuota, 'codex') : null;
+      const estimatedQuota = estimateTurnQuotaUsage(inc);
 
       if (
         !prev ||
+        prev.quotaTrack ||
         prev.totalTokens !== inc.totalTokens ||
         prev.status !== inc.status ||
         prev.stepCount !== inc.stepCount ||
@@ -298,49 +156,11 @@ export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, 
 
       const merged = stripHeavyStepsForArchive({
         ...inc,
-        quotaUsage: nativeQuota,
-        quotaTrack,
+        quotaUsage: estimatedQuota,
       });
 
       existingMap.set(inc.turnId, merged);
       mergedOrder.push(inc.turnId);
-
-      // Register for live quota attribution across every active model pool in this turn
-      if (!nativeQuota && quotaTrack.observedLive) {
-        const withinCompletionGrace =
-          quotaTrack.completedObservedMs > 0 && nowMs - quotaTrack.completedObservedMs < 90000;
-        if (merged.isRunning || withinCompletionGrace) {
-          const mergedPoolToks = poolTokensFromTurn(merged);
-          const targetPools = new Set();
-          for (const [pk, tok] of Object.entries(mergedPoolToks)) {
-            if (tok > 0) targetPools.add(pk);
-          }
-          if (merged.quotaGroupKey) targetPools.add(merged.quotaGroupKey);
-
-          for (const pk of targetPools) {
-            if (!liveTurnRefsByPool.has(pk)) continue;
-            if (!quotaTrack.pools[pk]) {
-              quotaTrack.pools[pk] = {
-                accum5hUsed: 0,
-                accumWeekUsed: 0,
-                isApproxConcurrent: false,
-                lastAttributedTokens: 0,
-              };
-            }
-            const curPoolTok = mergedPoolToks[pk] || 0;
-            const pendingDeltaTokens = Math.max(
-              0,
-              curPoolTok - (quotaTrack.pools[pk].lastAttributedTokens || 0)
-            );
-            liveTurnRefsByPool.get(pk).push({
-              turn: merged,
-              poolKey: pk,
-              poolTokens: curPoolTok,
-              pendingDeltaTokens,
-            });
-          }
-        }
-      }
     }
 
     // Keep archived older turns that may have scrolled out of live tail (e.g. Codex 1.5MB tail)
@@ -357,7 +177,14 @@ export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, 
         }
         return true;
       })
-      .map((pt) => ({ ...pt, isRunning: false, status: pt.status === 'RUNNING' ? 'DONE' : pt.status }));
+      .map((pt) =>
+        stripHeavyStepsForArchive({
+          ...pt,
+          isRunning: false,
+          status: pt.status === 'RUNNING' ? 'DONE' : pt.status,
+          quotaUsage: estimateTurnQuotaUsage(pt),
+        })
+      );
 
     const combinedAll = [
       ...archivedOlder,
@@ -365,85 +192,15 @@ export function reconcileAndPersistHistory({ fleetTasks = [], quotaGroups = {}, 
     ];
     if (combinedAll.length > MAX_TURNS_PER_CONV) {
       const overflow = combinedAll.slice(0, combinedAll.length - MAX_TURNS_PER_CONV);
-      const overflowTotals = overflow.map((t) =>
-        turnToTotals({
-          ...t,
-          quotaUsage: toPublicQuotaUsage(t.quotaTrack, t.quotaUsage, t.quotaGroupKey),
-        })
+      const overflowTotals = overflow.map((t) => turnToTotals(toPublicTurn(t)));
+      convRec.prunedTotals = toPublicPrunedTotals(
+        addTotals(toPublicPrunedTotals(convRec.prunedTotals) || emptyTotals(), ...overflowTotals)
       );
-      convRec.prunedTotals = addTotals(convRec.prunedTotals || emptyTotals(), ...overflowTotals);
       storeDirty = true;
     }
     convRec.turns = combinedAll.slice(-MAX_TURNS_PER_CONV);
-  }
 
-  // 2. Attribute pool quota drops to active / just-finished live turns per pool
-  for (const poolKey of ['gemini', '3p', 'codex']) {
-    const curr = readPoolState(quotaGroups, poolKey);
-    if (!curr) continue;
-    const prev = lastPoolSnapshots.get(poolKey);
-    let drop5h = 0;
-    let dropWeek = 0;
-
-    if (prev) {
-      if (
-        prev.pct5h !== null &&
-        curr.pct5h !== null &&
-        (!prev.reset5h || !curr.reset5h || prev.reset5h === curr.reset5h) &&
-        prev.pct5h >= curr.pct5h
-      ) {
-        drop5h = +(prev.pct5h - curr.pct5h).toFixed(3);
-      }
-      if (
-        prev.pctWeek !== null &&
-        curr.pctWeek !== null &&
-        (!prev.resetWeek || !curr.resetWeek || prev.resetWeek === curr.resetWeek) &&
-        prev.pctWeek >= curr.pctWeek
-      ) {
-        dropWeek = +(prev.pctWeek - curr.pctWeek).toFixed(3);
-      }
-    }
-
-    lastPoolSnapshots.set(poolKey, { ...curr, atMs: nowMs });
-
-    const candidates = liveTurnRefsByPool.get(poolKey) || [];
-    if ((drop5h > 0 || dropWeek > 0) && candidates.length > 0) {
-      const totalWeight = candidates.reduce((acc, c) => acc + Math.max(1, c.pendingDeltaTokens), 0);
-      const isConcurrent = candidates.length > 1;
-      for (const c of candidates) {
-        const weight = Math.max(1, c.pendingDeltaTokens);
-        const share = totalWeight > 0 ? weight / totalWeight : 1 / candidates.length;
-        const qt = c.turn.quotaTrack;
-        if (!qt.pools) qt.pools = {};
-        if (!qt.pools[c.poolKey]) {
-          qt.pools[c.poolKey] = {
-            accum5hUsed: 0,
-            accumWeekUsed: 0,
-            isApproxConcurrent: false,
-            lastAttributedTokens: 0,
-          };
-        }
-        const pt = qt.pools[c.poolKey];
-        pt.accum5hUsed = +((pt.accum5hUsed || 0) + drop5h * share).toFixed(3);
-        pt.accumWeekUsed = +((pt.accumWeekUsed || 0) + dropWeek * share).toFixed(3);
-        if (isConcurrent) pt.isApproxConcurrent = true;
-        pt.lastAttributedTokens = c.poolTokens || 0;
-      }
-      storeDirty = true;
-    }
-  }
-
-  // 3. Attach public quotaUsage onto fleetTasks.turns without exposing internal quotaTrack
-  for (const task of fleetTasks) {
-    const convRec = store.conversations[task.conversationId];
-    if (!convRec) continue;
-    const publicTurns = (convRec.turns || []).map((t) => {
-      const { quotaTrack, ...cleanTurn } = t;
-      return {
-        ...cleanTurn,
-        quotaUsage: toPublicQuotaUsage(quotaTrack, t.quotaUsage, t.quotaGroupKey),
-      };
-    });
+    const publicTurns = convRec.turns.map(toPublicTurn);
     task.turns = publicTurns;
     if (publicTurns.length > 0) {
       task.currentTurn = publicTurns[publicTurns.length - 1];
@@ -458,15 +215,7 @@ export function getConversationRecord(convId) {
   const store = loadStore();
   const convRec = store.conversations?.[convId];
   if (!convRec) return null;
-  const publicTurns = Array.isArray(convRec.turns)
-    ? convRec.turns.map((t) => {
-        const { quotaTrack, ...cleanTurn } = t;
-        return {
-          ...cleanTurn,
-          quotaUsage: toPublicQuotaUsage(quotaTrack, t.quotaUsage, t.quotaGroupKey),
-        };
-      })
-    : [];
+  const publicTurns = Array.isArray(convRec.turns) ? convRec.turns.map(toPublicTurn) : [];
   return {
     conversationId: convRec.conversationId || convId,
     title: convRec.title || '',
@@ -474,11 +223,46 @@ export function getConversationRecord(convId) {
     parentConversationId: convRec.parentConversationId || '',
     subagentRole: convRec.subagentRole || '',
     updatedAtMs: convRec.updatedAtMs || 0,
-    prunedTotals: convRec.prunedTotals ? addTotals(convRec.prunedTotals) : null,
+    prunedTotals: toPublicPrunedTotals(convRec.prunedTotals),
     turns: publicTurns,
   };
 }
 
 export function getPersistedTurnsForConversation(convId) {
   return getConversationRecord(convId)?.turns || [];
+}
+
+function accumulateQuotaByPool(acc, quotaUsage) {
+  const byPool = quotaUsage?.byPool;
+  if (!byPool || typeof byPool !== 'object') return;
+  for (const [pk, b] of Object.entries(byPool)) {
+    if (!b || typeof b !== 'object') continue;
+    const h5 = Number(b.fiveHourUsedPct) || 0;
+    const wk = Number(b.weeklyUsedPct) || 0;
+    const wTok = Number(b.weightedTokens) || 0;
+    if (h5 <= 0 && wk <= 0 && wTok <= 0) continue;
+    if (!acc[pk]) acc[pk] = { h5: 0, wk: 0, wTok: 0 };
+    acc[pk].h5 += h5;
+    acc[pk].wk += wk;
+    acc[pk].wTok += wTok;
+  }
+}
+
+export function getLocalQuotaEstimatesByConv() {
+  const store = loadStore();
+  const out = {};
+  for (const [cid, convRec] of Object.entries(store.conversations || {})) {
+    if (!convRec || typeof convRec !== 'object') continue;
+    const acc = {};
+    if (convRec.prunedTotals) {
+      accumulateQuotaByPool(acc, estimateTotalsQuotaUsage(convRec.prunedTotals));
+    }
+    for (const t of convRec.turns || []) {
+      accumulateQuotaByPool(acc, estimateTurnQuotaUsage(t));
+    }
+    if (Object.keys(acc).length > 0) {
+      out[cid] = acc;
+    }
+  }
+  return out;
 }
