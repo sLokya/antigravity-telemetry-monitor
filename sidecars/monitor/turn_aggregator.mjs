@@ -228,7 +228,7 @@ export function aggregateStepsToTurns({
       byIdx.set(ct.turnIndex, { meta: ct, steps: [] });
     }
     for (const s of steps) {
-      const idx = s.userTurnIndex || 1;
+      const idx = typeof s.userTurnIndex === 'number' ? s.userTurnIndex : 1;
       if (!byIdx.has(idx)) {
         byIdx.set(idx, {
           meta: {

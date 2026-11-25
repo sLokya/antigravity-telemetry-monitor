@@ -8,189 +8,132 @@
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
     :root {
-      --hud-surface: color-mix(in srgb, var(--card, #ffffff) 92%, var(--background, #f8fafc) 8%);
-      --hud-subtle: color-mix(in srgb, var(--background, #f1f5f9) 70%, var(--card, #ffffff) 30%);
-      --hud-border: color-mix(in srgb, var(--border, #e2e8f0) 85%, #64748b 15%);
+      --hud-surface: var(--card, #ffffff);
+      --hud-subtle: color-mix(in srgb, var(--background, #f4f6f9) 68%, var(--card, #ffffff) 32%);
+      --hud-border: color-mix(in srgb, var(--border, #e2e8f0) 82%, #64748b 18%);
+      --hud-hairline: color-mix(in srgb, var(--border, #e2e8f0) 65%, transparent 35%);
+      --hud-ease: cubic-bezier(0.22, 1, 0.36, 1);
     }
-    body {
-      background: var(--background, #f8fafc);
-      color: var(--foreground, #0f172a);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
-    }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
-      font-variant-numeric: tabular-nums;
-    }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.38; transform: scale(0.88); }
-    }
-    @keyframes shimmer-bar {
-      0% { background-position: 0% 50%; }
-      100% { background-position: 200% 50%; }
-    }
-    .pulse-live {
-      animation: pulse-dot 1.4s infinite ease-in-out;
-    }
-    .accent-header-bar {
-      background: linear-gradient(90deg, #0ea5e9 0%, #6366f1 50%, #8b5cf6 100%);
-      background-size: 200% 100%;
-      animation: shimmer-bar 6s linear infinite;
-    }
-    .hud-card {
-      background: var(--card, #ffffff);
-      border: 1px solid var(--hud-border);
-      box-shadow: 0 2px 10px -2px rgba(15, 23, 42, 0.06), 0 1px 3px -1px rgba(15, 23, 42, 0.04);
-    }
-    .kpi-tile {
-      background: var(--hud-subtle);
-      border: 1px solid var(--hud-border);
-      transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-    .task-card {
-      background: var(--card, #ffffff);
-      border: 1px solid var(--hud-border);
-      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
-      transition: all 0.16s ease;
-    }
-    .task-card:hover {
-      box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.09);
-      transform: translateY(-1px);
-    }
-    .task-card-running {
-      border-color: rgba(14, 165, 233, 0.45);
-      background: linear-gradient(90deg, rgba(14, 165, 233, 0.05) 0%, var(--card, #ffffff) 28%);
-    }
-    .task-card-bg {
-      border-color: rgba(139, 92, 246, 0.48);
-      background: linear-gradient(90deg, rgba(139, 92, 246, 0.06) 0%, var(--card, #ffffff) 32%);
-    }
-    .metric-pill {
-      background: var(--hud-subtle);
-      border: 1px solid var(--hud-border);
-    }
-    .bg-task-tray {
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.07) 0%, rgba(14, 165, 233, 0.04) 100%);
-      border: 1px solid rgba(99, 102, 241, 0.28);
-    }
-    .quota-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.5rem;
-    }
-    .quota-clock {
-      display: none;
-    }
-    @media (min-width: 560px) {
-      .quota-clock {
-        display: inline;
-      }
-    }
-    @media (max-width: 499px) {
-      .quota-grid {
-        gap: 0.375rem;
-      }
-    }
-    @media (max-width: 359px) {
-      .quota-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
+    body { background: var(--background, #f6f8fa); color: var(--foreground, #0f172a); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif; font-size: 13px; line-height: 1.35; }
+    .mono { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .tnum { font-variant-numeric: tabular-nums; }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.38; transform: scale(0.88); } }
+    .pulse-live { animation: pulse-dot 1.4s infinite ease-in-out; }
+    .hud-shell { max-width: 960px; margin: 0 auto; }
+    .hud-topbar { container-type: inline-size; position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--background, #f6f8fa) 90%, transparent 10%); backdrop-filter: blur(8px); border-bottom: 1px solid var(--hud-border); }
+    .hud-btn { font-size: 11px; line-height: 1; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--hud-border); background: var(--hud-surface); color: var(--muted-foreground, #64748b); font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; transition: border-color 160ms var(--hud-ease), color 160ms var(--hud-ease), background-color 160ms var(--hud-ease); }
+    .hud-btn:hover { border-color: rgba(14, 165, 233, 0.5); color: var(--foreground, #0f172a); }
+    @container (max-width: 470px) { .topbar-wide-only { display: none; } }
+    @container (max-width: 620px) { .topbar-xl-only { display: none; } }
+    .hud-menu-popover { margin: 0; position: fixed; top: 44px; right: 10px; left: auto; bottom: auto; min-width: 176px; padding: 6px; border-radius: 10px; border: 1px solid var(--hud-border); background: var(--hud-surface); color: var(--foreground, #0f172a); box-shadow: 0 10px 28px -6px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08); }
+    .hud-menu-popover:is(:popover-open, .\:popover-open) { display: flex; flex-direction: column; gap: 4px; }
+    @supports not selector(:popover-open) { .hud-menu-popover:not(.\:popover-open) { display: none; } }
+    .hud-menu-item { width: 100%; justify-content: space-between; padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--foreground, #0f172a); font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color 140ms var(--hud-ease), border-color 140ms var(--hud-ease); }
+    .hud-menu-item:hover { background: var(--hud-subtle); border-color: var(--hud-hairline); }
+    .kpi-tile { background: var(--hud-surface); border: 1px solid var(--hud-border); }
+    .quota-matrix { background: var(--hud-surface); border: 1px solid var(--hud-border); border-radius: 10px; padding: 6px 10px; container-type: inline-size; }
+    .quota-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 8px; padding: 3px 0; }
+    .quota-row + .quota-row { border-top: 1px solid var(--hud-hairline); }
+    .quota-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .quota-track { flex: 1; min-width: 24px; height: 5px; border-radius: 999px; background: var(--hud-subtle); overflow: hidden; }
+    .quota-clock { display: none; }
+    @container (min-width: 520px) { .quota-clock { display: inline; } }
+    @container (max-width: 360px) { .quota-row { grid-template-columns: 54px minmax(0, 1fr); } .quota-cell-wk { grid-column: 2; } }
+    .task-card { container-type: inline-size; background: var(--hud-surface); border: 1px solid var(--hud-border); border-radius: 10px; transition: border-color 160ms var(--hud-ease), background-color 160ms var(--hud-ease); }
+    .task-card:hover { border-color: color-mix(in srgb, var(--hud-border) 55%, #0ea5e9 45%); }
+    .task-card-running { border-color: rgba(14, 165, 233, 0.42); background: linear-gradient(90deg, rgba(14, 165, 233, 0.045) 0%, var(--hud-surface) 24%); }
+    .task-card-bg { border-color: rgba(139, 92, 246, 0.44); background: linear-gradient(90deg, rgba(139, 92, 246, 0.05) 0%, var(--hud-surface) 26%); }
+    .task-kpi-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 5px 0; border-top: 1px solid var(--hud-hairline); border-bottom: 1px solid var(--hud-hairline); }
+    @container (max-width: 380px) { .task-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px; } }
+    .bg-task-tray { background: linear-gradient(135deg, rgba(99, 102, 241, 0.06) 0%, rgba(14, 165, 233, 0.03) 100%); border: 1px solid rgba(99, 102, 241, 0.25); }
+    @media (prefers-reduced-motion: reduce) { .pulse-live { animation: none !important; } .hud-btn, .hud-menu-item, .task-card { transition: none !important; } }
   </style>
 </head>
-<body class="p-2 sm:p-2.5 select-none antialiased">
-  <div class="max-w-4xl mx-auto space-y-2 sm:space-y-2.5">
-    <div id="actionToast" class="hidden text-xs mono px-3 py-2 rounded-xl border shadow-sm flex items-center justify-between transition-all">
+<body class="select-none antialiased">
+  <div class="hud-shell px-2 pb-3 space-y-2">
+    <!-- Compact Single-Row Sticky Topbar -->
+    <header class="hud-topbar py-1.5 -mx-2 px-2 flex items-center justify-between gap-1.5 flex-nowrap">
+      <div class="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+        <span id="fleetDot" class="w-2 h-2 rounded-full bg-emerald-500 pulse-live shrink-0"></span>
+        <h1 id="hudTitleText" class="text-[13px] font-bold tracking-tight truncate text-[var(--foreground)]">并行任务监控台</h1>
+        <span id="fleetRunningBadge" class="text-[11px] mono font-semibold text-sky-600 dark:text-sky-400 shrink-0 whitespace-nowrap">0</span>
+        <span id="fleetBgBadge" class="hidden text-[11px] mono text-violet-600 dark:text-violet-400 font-semibold shrink-0 whitespace-nowrap"></span>
+        <span id="fleetCodexBadge" class="hidden topbar-xl-only text-[11px] mono text-[var(--muted-foreground)] shrink-0 whitespace-nowrap"></span>
+      </div>
+
+      <div class="flex items-center gap-1 shrink-0">
+        <div class="inline-flex items-center p-0.5 rounded-md bg-[var(--hud-surface)] border border-[var(--hud-border)]">
+          <button id="filterRunBtn" type="button" aria-pressed="true" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] leading-none px-1.5 py-1 rounded bg-sky-500 text-white font-semibold whitespace-nowrap">
+            <span id="filterRunLabel">活跃</span> <span id="filterRunCount" class="mono opacity-90">0</span>
+          </button>
+          <button id="filterAllBtn" type="button" aria-pressed="false" class="text-[11px] leading-none px-1.5 py-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium whitespace-nowrap">
+            <span id="filterAllLabel">全部</span> <span id="filterAllCount" class="mono opacity-75">0</span>
+          </button>
+        </div>
+        <button id="filterCodexBtn" type="button" aria-pressed="false" title="切换是否在当前视图中显示 Codex 对话" class="hud-btn">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span><span id="filterCodexLabel">CX</span> <span id="filterCodexCount" class="mono opacity-80">0</span>
+        </button>
+        <button id="quotaCalibBtn" type="button" aria-expanded="false" onclick="toggleQuotaCalibDrawer(event)" title="单人配额校准与估算偏高自检" class="hud-btn">
+          <span>⚖️</span><span id="quotaCalibBtnLabel" class="topbar-wide-only">校准</span>
+        </button>
+        <button id="refreshBtn" type="button" title="刷新" class="hud-btn px-1.5">
+          <span>↻</span><span id="refreshBtnLabel" class="sr-only">刷新</span>
+        </button>
+        <button id="hudMoreBtn" type="button" popovertarget="hudOverflowMenu" title="更多工具（签名头 / 语言 / 版本）" class="hud-btn px-1.5 relative">
+          <span class="font-bold tracking-widest">⋯</span>
+          <span id="hudMoreAlertDot" class="hidden w-1.5 h-1.5 rounded-full bg-amber-500 absolute -top-0.5 -right-0.5"></span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Secondary Tools Popover (Native Popover API) -->
+    <div id="hudOverflowMenu" popover="auto" class="hud-menu-popover">
+      <button id="fpLedgerBtn" type="button" onclick="closeHudMenu(); toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="hud-menu-item">
+        <span class="flex items-center gap-1.5"><span>🔑</span><span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span></span>
+        <span id="fpLedgerMenuHint" class="text-[10px] mono text-[var(--muted-foreground)]"></span>
+      </button>
+      <button id="langToggleBtn" type="button" onclick="toggleHudLang(); closeHudMenu()" title="Switch language / 切换语言" class="hud-menu-item">
+        <span class="flex items-center gap-1.5"><span>🌐</span><span>Language / 语言</span></span>
+        <span id="langToggleLabel" class="text-[11px] mono font-semibold text-sky-600 dark:text-sky-400">EN</span>
+      </button>
+      <button id="pluginUpdateBtn" type="button" aria-expanded="false" onclick="closeHudMenu(); togglePluginUpdateDrawer(event)" title="检查或更新插件" class="hud-menu-item">
+        <span class="flex items-center gap-1.5"><span>⬆️</span><span>插件版本</span></span>
+        <span id="pluginUpdateBtnLabel" class="text-[11px] mono text-[var(--muted-foreground)]">v1.2</span>
+      </button>
+    </div>
+
+    <div id="actionToast" class="hidden text-xs mono px-3 py-1.5 rounded-lg border shadow-sm flex items-center justify-between">
       <span id="actionToastText" class="font-medium">--</span>
       <button onclick="document.getElementById('actionToast').classList.add('hidden')" class="text-xs opacity-70 hover:opacity-100 px-1">✕</button>
     </div>
-    <div class="hud-card rounded-2xl overflow-hidden">
-      <div class="h-1 w-full accent-header-bar"></div>
-      <div class="p-2 sm:p-3 space-y-2 sm:space-y-2.5">
-        <!-- Header Bar -->
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="flex items-center gap-1.5 flex-wrap min-w-0">
-            <div class="flex items-center gap-1.5">
-              <span id="fleetDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-live shrink-0 ring-4 ring-emerald-500/15"></span>
-              <span id="hudTitleText" class="text-sm font-extrabold tracking-tight whitespace-nowrap">并行任务监控台</span>
-            </div>
-            <span id="fleetRunningBadge" class="text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 font-semibold whitespace-nowrap">
-              0
-            </span>
-            <span id="fleetCodexBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/35 font-semibold whitespace-nowrap">
-              🟢 0 Codex
-            </span>
-            <span id="fleetBgBadge" class="hidden text-[11px] sm:text-xs mono px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-300 border border-violet-500/35 font-semibold whitespace-nowrap">
-              ⚙️ 0
-            </span>
-          </div>
+    <div id="fpAlertBanner" class="hidden rounded-lg border border-rose-500/50 bg-rose-500/10 px-2.5 py-1.5 text-xs"></div>
+    <div id="quotaCalibAlert" class="hidden rounded-lg border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs space-y-1"></div>
+    <div id="fpLedgerDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-indigo-500/35"></div>
+    <div id="quotaCalibDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-sky-500/35"></div>
+    <div id="pluginUpdateDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-emerald-500/35"></div>
 
-          <!-- Segmented Filter Pill + Codex Toggle + Utilities -->
-          <div class="flex flex-wrap items-center gap-1.5 max-w-full">
-            <div class="inline-flex flex-wrap items-center p-0.5 rounded-lg bg-[var(--background)] border border-[var(--hud-border)] max-w-full">
-              <button id="filterRunBtn" type="button" aria-pressed="true" title="展示进行中任务及今日未归档的近期对话，进行中的默认置顶" class="text-[11px] sm:text-xs px-2 py-1 rounded-md bg-sky-500 text-white font-semibold shadow-sm transition whitespace-nowrap">
-                <span id="filterRunLabel">最近活跃</span> <span id="filterRunCount" class="mono opacity-90">(0)</span>
-              </button>
-              <button id="filterAllBtn" type="button" aria-pressed="false" class="text-[11px] sm:text-xs px-2 py-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-medium transition whitespace-nowrap">
-                <span id="filterAllLabel">全部</span> <span id="filterAllCount" class="mono opacity-75">(0)</span>
-              </button>
-            </div>
-            <button id="filterCodexBtn" type="button" aria-pressed="false" title="切换是否在当前视图（最近活跃 / 全部）中显示 Codex 对话" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-emerald-500/50 font-medium transition inline-flex items-center gap-1 whitespace-nowrap">
-              <span id="filterCodexLabel">🟢 Codex</span> <span id="filterCodexCount" class="mono opacity-80">(0)</span>
-            </button>
-            <div class="inline-flex items-center gap-1.5">
-              <button id="quotaCalibBtn" type="button" aria-expanded="false" onclick="toggleQuotaCalibDrawer(event)" title="单人配额校准与估算偏高自检" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>⚖️</span><span id="quotaCalibBtnLabel">校准</span></button>
-              <button id="fpLedgerBtn" type="button" onclick="toggleFpLedgerDrawer()" title="Thinking signature header ledger" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🔑</span><span id="fpLedgerBtnLabel"><span id="fpLedgerBtnLabelBase">签名头</span></span></button>
-              <button id="langToggleBtn" type="button" onclick="toggleHudLang()" title="Switch language / 切换语言" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>🌐</span><span id="langToggleLabel" class="mono font-semibold">EN</span></button>
-              <button id="pluginUpdateBtn" type="button" aria-expanded="false" onclick="togglePluginUpdateDrawer(event)" title="检查或更新插件" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:border-sky-500/50 hover:text-sky-500 font-medium mono transition flex items-center gap-1 whitespace-nowrap"><span>⬆️</span><span id="pluginUpdateBtnLabel">v1.2</span></button>
-              <button id="refreshBtn" type="button" title="Refresh" class="text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap"><span>↻</span><span id="refreshBtnLabel">刷新</span></button>
-            </div>
-          </div>
-        </div>
-        <div id="fpAlertBanner" class="hidden rounded-xl border border-rose-500/50 bg-rose-500/12 px-3 py-2 text-xs"></div>
-        <div id="quotaCalibAlert" class="hidden rounded-xl border border-amber-500/50 bg-amber-500/12 px-3 py-2 text-xs space-y-1.5"></div>
-        <div id="fpLedgerDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-indigo-500/35"></div>
-        <div id="quotaCalibDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-sky-500/35"></div>
-        <div id="pluginUpdateDrawer" class="hidden kpi-tile rounded-xl p-2.5 space-y-2 border-emerald-500/35"></div>
-
-        <!-- Quota Progress Bars Row -->
-        <div class="quota-grid">
-          <!-- 5-Hour Quota Card -->
-          <div class="kpi-tile rounded-xl px-2.5 py-2 space-y-1.5 min-w-0">
-            <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
-              <div class="flex items-center gap-1.5 min-w-0">
-                <span class="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
-                <span id="quota5hLabel" class="text-xs font-bold text-[var(--foreground)] truncate">5小时配额</span>
-              </div>
-              <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">5h</span>
-            </div>
-            <div id="quota5hPoolsList" class="space-y-1.5 text-xs mono">
-              <div class="text-[11px] text-[var(--muted-foreground)]">--</div>
-            </div>
-          </div>
-
-          <!-- Weekly Quota Card -->
-          <div class="kpi-tile rounded-xl px-2.5 py-2 space-y-1.5 min-w-0">
-            <div class="flex items-center justify-between gap-1 border-b border-[var(--hud-border)]/70 pb-1">
-              <div class="flex items-center gap-1.5 min-w-0">
-                <span class="w-2 h-2 rounded-full bg-indigo-500 shrink-0"></span>
-                <span id="quota7dLabel" class="text-xs font-bold text-[var(--foreground)] truncate">周窗口配额</span>
-              </div>
-              <span class="text-[10px] mono text-[var(--muted-foreground)] shrink-0">7d</span>
-            </div>
-            <div id="quotaWeeklyPoolsList" class="space-y-1.5 text-xs mono">
-              <div class="text-[11px] text-[var(--muted-foreground)]">--</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Conversation & Background Task Cards Container -->
-        <div id="fleetTasksContainer" class="space-y-2 pt-0.5">
-          <div id="initialScanningMsg" class="text-xs text-[var(--muted-foreground)] text-center py-4">...</div>
-        </div>
+    <!-- Unified Compact Quota Matrix (5h + 7d side-by-side per pool) -->
+    <section class="quota-matrix" aria-label="Account Quotas">
+      <div class="quota-row pb-1 pt-0 text-[10px] font-semibold text-[var(--muted-foreground)] border-b border-[var(--hud-hairline)]">
+        <span class="truncate">配额池</span>
+        <span class="flex items-center justify-between gap-1 min-w-0">
+          <span id="quota5hLabel" class="truncate">5小时余量</span>
+          <span class="mono opacity-75 shrink-0">5h</span>
+        </span>
+        <span class="flex items-center justify-between gap-1 min-w-0 quota-cell-wk">
+          <span id="quota7dLabel" class="truncate">周窗口余量</span>
+          <span class="mono opacity-75 shrink-0">7d</span>
+        </span>
       </div>
-    </div>
+      <div id="quotaMatrixList" class="text-[11px] mono">
+        <div class="text-[11px] text-[var(--muted-foreground)] py-1">--</div>
+      </div>
+    </section>
 
+    <!-- Conversation & Background Task Cards Container -->
+    <main id="fleetTasksContainer" class="space-y-1.5">
+      <div id="initialScanningMsg" class="text-xs text-[var(--muted-foreground)] text-center py-4">...</div>
+    </main>
   </div>
 
   <script>
@@ -227,6 +170,41 @@
         window.location.reload();
       }
     }
+
+    window.closeHudMenu = function () {
+      const menu = document.getElementById('hudOverflowMenu');
+      if (!menu) return;
+      if (typeof menu.hidePopover === 'function') {
+        try { menu.hidePopover(); } catch {}
+      } else {
+        menu.classList.remove(':popover-open');
+      }
+    };
+
+    // Fallback toggle for browsers without native Popover API
+    if (!Object.hasOwn(HTMLElement.prototype, 'popover')) {
+      const moreBtn = document.getElementById('hudMoreBtn');
+      const menu = document.getElementById('hudOverflowMenu');
+      moreBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu?.classList.toggle(':popover-open');
+      });
+      document.addEventListener('click', (e) => {
+        if (menu && !menu.contains(e.target) && e.target !== moreBtn) {
+          menu.classList.remove(':popover-open');
+        }
+      });
+    }
+
+    window.syncHudMoreDot = function () {
+      const dot = document.getElementById('hudMoreAlertDot');
+      if (!dot) return;
+      const d = window.lastPayload || {};
+      const fpAlert = (d.fingerprintLedger?.unackedCount || 0) > 0 ||
+        (d.fingerprintLedger?.baselines || []).some((b) => b.status === 'CHANGED');
+      const updAlert = Boolean(d.pluginUpdate?.needsReload || (d.pluginUpdate?.hasUpdate && !d.pluginUpdate?.dismissed));
+      dot.classList.toggle('hidden', !(fpAlert || updAlert));
+    };
 
     refreshBtn.addEventListener('click', () => reloadWithCacheBust());
 
@@ -435,23 +413,14 @@
     }
 
     function getStateStyle(stateCode, hasRunningBg = false) {
-      if (stateCode === 'BG_RUNNING') {
-        return {
-          dot: 'bg-violet-500 pulse-live',
-          badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/35',
-          cardClass: 'task-card-bg',
-          accentBar: 'bg-violet-500',
-        };
-      }
-      if (stateCode === 'THINKING') {
-        return {
-          dot: 'bg-amber-500 pulse-live',
-          badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/35',
-          cardClass: 'task-card-running',
-          accentBar: 'bg-amber-500',
-        };
-      }
-      if (stateCode === 'TOOL_RUNNING' || stateCode === 'RUNNING') {
+      const isActive =
+        hasRunningBg ||
+        stateCode === 'BG_RUNNING' ||
+        stateCode === 'SUB_RUNNING' ||
+        stateCode === 'THINKING' ||
+        stateCode === 'TOOL_RUNNING' ||
+        stateCode === 'RUNNING';
+      if (isActive) {
         return {
           dot: 'bg-sky-500 pulse-live',
           badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/35',
@@ -459,19 +428,11 @@
           accentBar: 'bg-sky-500',
         };
       }
-      if (hasRunningBg) {
-        return {
-          dot: 'bg-violet-500 pulse-live',
-          badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/35',
-          cardClass: 'task-card-bg',
-          accentBar: 'bg-violet-500',
-        };
-      }
       return {
         dot: 'bg-emerald-500',
         badge: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/25',
         cardClass: '',
-        accentBar: 'bg-emerald-500/60',
+        accentBar: 'bg-emerald-500',
       };
     }
 
@@ -553,13 +514,23 @@
 
       const btnLabel = document.getElementById('fpLedgerBtnLabel');
       const btn = document.getElementById('fpLedgerBtn');
+      const hint = document.getElementById('fpLedgerMenuHint');
       if (changedBaselines.length > 0 || ledger.unackedCount > 0) {
-        btnLabel.textContent = `${tHud('btnSig')} (${changedBaselines.length || ledger.unackedCount})`;
-        btn.className = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold transition flex items-center gap-1 whitespace-nowrap';
+        if (btnLabel) btnLabel.textContent = tHud('btnSig');
+        if (hint) {
+          hint.textContent = `⚠ ${changedBaselines.length || ledger.unackedCount}`;
+          hint.className = 'text-[10px] mono font-bold text-amber-600 dark:text-amber-400';
+        }
+        if (btn) btn.className = 'hud-menu-item text-amber-600 dark:text-amber-400 font-bold';
       } else {
-        btnLabel.textContent = `${tHud('btnSig')} (${baselines.length})`;
-        btn.className = 'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-indigo-500/50 hover:text-indigo-500 font-medium transition flex items-center gap-1 whitespace-nowrap';
+        if (btnLabel) btnLabel.textContent = tHud('btnSig');
+        if (hint) {
+          hint.textContent = `(${baselines.length})`;
+          hint.className = 'text-[10px] mono text-[var(--muted-foreground)]';
+        }
+        if (btn) btn.className = 'hud-menu-item';
       }
+      if (typeof window.syncHudMoreDot === 'function') window.syncHudMoreDot();
 
       const banner = document.getElementById('fpAlertBanner');
       if (changedBaselines.length > 0) {
@@ -745,8 +716,8 @@
                   </button>
                 ` : ''}
                 ${cp.isRunning && cp.bridgePid ? `
-                  <button onclick="stopCodexTurn(event, '${cp.threadId}')"
-                          class="px-2 py-0.5 rounded-md border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 font-sans font-bold transition text-[11px] whitespace-nowrap">
+                  <button type="button" onclick="stopCodexTurn(event, '${cp.threadId}')"
+                          class="px-2 py-0.5 rounded-md border border-[var(--hud-border)] bg-[var(--hud-surface)] text-[var(--muted-foreground)] hover:text-rose-600 dark:hover:text-rose-400 hover:border-rose-500/40 font-sans font-medium text-[11px] whitespace-nowrap">
                     ${escapeHtml(tHud('bgStop'))}
                   </button>
                 ` : ''}

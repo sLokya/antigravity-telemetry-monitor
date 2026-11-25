@@ -120,6 +120,7 @@ export function nestSubagents({
         conversationId: cid,
         title,
         role,
+        subagentType: liveChild?.subagentType || '',
         isRunning: Boolean(liveChild?.isRunning),
         stateCode: liveChild?.stateCode || 'IDLE',
         stateLabel: liveChild?.stateLabel || '空闲就绪',

@@ -1,5 +1,5 @@
 import { SidecarApp, Response } from 'sidecar_sdk';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, fstatSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -10,7 +10,8 @@ import {
   loadFingerprintLedger, flushFingerprintLedger, recordModelFingerprint, acknowledgeFingerprintChanges,
 } from './fingerprint_ledger.mjs';
 import { extractUserPromptPreview, buildWakeTurn, aggregateStepsToTurns, computeConversationTurnMetrics } from './turn_aggregator.mjs';
-import { reconcileAndPersistHistory, getPersistedTurnsForConversation, getLocalQuotaEstimatesByConv } from './task_history_store.mjs';
+import { reconcileAndPersistHistory, getPersistedTurnsForConversation, getLocalQuotaEstimatesByConv, getRecentLocalQuotaEstimatesByPool } from './task_history_store.mjs';
+import { parseCodexRolloutCached, extractTargetWorkdirFromText, stripSystemPromptHeader } from './codex_rollout_parser.mjs';
 import { buildRootMap, finalizeFleet, preselect, finalSelect, dismissConversation, restoreConversation } from './fleet/index.mjs';
 import { cloneQuotaGroups, mergeCatalogQuotaFallback, pickLatestCodexQuota, updateFamilyQuotaTracker, updateQuotaCalibrationTracker, handleQuotaAction } from './quota/index.mjs';
 import { startBackgroundUpdateChecker, getPluginUpdateStatus, handleUpdaterAction } from './updater/index.mjs';
@@ -446,6 +447,7 @@ async function resolveBackgroundTasks(convId, bgCandidates, nowMs) {
             if (td.title) toolSummary = td.title;
             if (td.description) commandLine = td.description;
             if (td.movedToBackgroundAt && !startedAt) startedAt = td.movedToBackgroundAt;
+            if (typeof td.isDaemon === 'boolean') isDaemon = td.isDaemon;
 
             const rc = stepObj.runCommand || {};
             if (rc.commandLine) commandLine = rc.commandLine;
@@ -1315,526 +1317,6 @@ function resolveTaskWorkingState(convId, lsStatus, transcriptInfo, hookState, no
 // OPENAI CODEX DESKTOP / CLI LIVE TELEMETRY & PROGRESS ENGINE
 // ============================================================================
 
-const codexRolloutCache = new Map();
-
-function cleanCodexCommandText(cmdArrOrStr) {
-  if (Array.isArray(cmdArrOrStr)) {
-    const last = cmdArrOrStr[cmdArrOrStr.length - 1] || '';
-    return String(last).replace(/\s+/g, ' ').trim().slice(0, 150);
-  }
-  const s = String(cmdArrOrStr || '');
-  const cmdMatch = s.match(/cmd:\s*"((?:[^"\\]|\\.)*)"/);
-  if (cmdMatch) {
-    return cmdMatch[1]
-      .replace(/\\n/g, ' ')
-      .replace(/\\"/g, '"')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 150);
-  }
-  if (s.includes('apply_patch')) {
-    const files = [
-      ...s.matchAll(/\*\*\* (?:Add|Update|Delete) File:\s*([^\r\n\\"]+)/g),
-    ].map((x) => basename(x[1].trim()));
-    return files.length > 0 ? `apply_patch (${files.join(', ')})` : 'apply_patch (修改文件)';
-  }
-  return s.replace(/\s+/g, ' ').trim().slice(0, 150);
-}
-
-function fmtClockTime(tsMs) {
-  if (!tsMs) return '';
-  const d = new Date(tsMs);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function extractTargetWorkdirFromText(txt) {
-  if (!txt) return '';
-  const s = String(txt);
-  const m = s.match(/本次任务的实际目标工作目录为\s*`([^`]+)`/);
-  if (m) return m[1].trim();
-  const wsMatch = s.match(/`((?:[a-zA-Z]:[\\/]|\/)[^`\r\n]+)`/);
-  return wsMatch ? wsMatch[1].trim() : '';
-}
-
-function stripSystemPromptHeader(txt) {
-  if (!txt) return '';
-  return String(txt)
-    .replace(/^\[系统(?:工作区与)?自主执行指令[\s\S]*?\]\s*/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function parseCodexRolloutCached(rawRolloutPath, threadId, defaultModel, defaultEffort) {
-  if (!rawRolloutPath) return null;
-  const cleanPath = String(rawRolloutPath).replace(/^\\\\\?\\/, '');
-  if (!existsSync(cleanPath)) return null;
-
-  try {
-    const fd = openSync(cleanPath, 'r');
-    let st;
-    let buf;
-    try {
-      st = fstatSync(fd);
-      const cached = codexRolloutCache.get(cleanPath);
-      if (
-        cached &&
-        cached.fileSize === st.size &&
-        Date.now() - cached.parsedAtMs < (cached.result?.hasUnclosedTurn ? 1200 : 15000)
-      ) {
-        return cached.result;
-      }
-      const maxReadBytes = 1572864; // 1.5 MB tail is plenty for full turn history & speed
-      const readLen = Math.min(st.size, maxReadBytes);
-      buf = Buffer.allocUnsafe(readLen);
-      readSync(fd, buf, 0, readLen, st.size - readLen);
-    } finally {
-      closeSync(fd);
-    }
-
-    const rawText = buf.toString('utf8');
-    const lines = rawText.split('\n');
-    // If we sliced into the middle of the file, drop the partial first line
-    if (st.size > 1572864 && lines.length > 1) {
-      lines.shift();
-    }
-
-    let curModel = defaultModel || 'gpt-6.1-sol';
-    let curEffort = defaultEffort || 'medium';
-    let targetWorkdir = '';
-    let turnCount = 0;
-    let activeTurnId = null;
-    let turnStartedAtMs = 0;
-    let turnCompletedAtMs = 0;
-    let lastTurnDurationSec = 0;
-    let lastRecordMs = st.mtimeMs || 0;
-
-    let stepCountInTurn = 0;
-    let cmdCountInTurn = 0;
-    let fileCountInTurn = 0;
-    let latestCommentary = '';
-    let currentAction = '';
-    let pendingTool = '';
-    let lastEventKind = 'IDLE';
-    const recentActions = [];
-
-    // Per-invocation speed & token tracking
-    let reqStartMs = null;
-    let firstGenMs = null;
-    let lastGenMs = null;
-    let nextReqStartMs = null;
-    let prevTotalOutTokens = -1;
-    let latestResponseId = '';
-    let latestRateLimits = null;
-    let latestRateLimitsMs = 0;
-    let compactionCount = 0;
-    let streamErrorCount = 0;
-    let rateLimitErrorCount = 0;
-    let lastErrorText = '';
-    const steps = [];
-    const codexTurns = [];
-    let activeTurnObj = null;
-    let pendingUserPrompt = '';
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-      let obj;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const tsMs = Date.parse(obj.timestamp) || 0;
-      if (tsMs > lastRecordMs) lastRecordMs = tsMs;
-      const p = obj.payload || {};
-
-      if (obj.type === 'session_meta') {
-        if (p.target_workdir) targetWorkdir = p.target_workdir;
-      } else if (obj.type === 'turn_context') {
-        if (p.model) curModel = p.model;
-        if (p.effort) curEffort = p.effort;
-        if (!reqStartMs && tsMs) reqStartMs = tsMs;
-      } else if (obj.type === 'compacted') {
-        compactionCount++;
-      } else if (obj.type === 'token_usage_record') {
-        if (p.response_id) latestResponseId = p.response_id;
-        if (tsMs) lastGenMs = tsMs;
-      } else if (obj.type === 'response_item') {
-        const pType = p.type || '';
-        if (pType === 'reasoning') {
-          lastEventKind = 'REASONING';
-          if (!firstGenMs && tsMs) firstGenMs = tsMs;
-          if (tsMs) lastGenMs = tsMs;
-        } else if (pType === 'message' && p.role === 'user') {
-          const uTxt = (p.content || []).map((c) => c.text || '').join(' ');
-          const wd = extractTargetWorkdirFromText(uTxt);
-          if (wd) targetWorkdir = wd;
-          const cleanPrompt = extractUserPromptPreview(stripSystemPromptHeader(uTxt));
-          if (cleanPrompt) {
-            pendingUserPrompt = cleanPrompt;
-            if (activeTurnObj && !activeTurnObj.promptPreview) {
-              activeTurnObj.promptPreview = cleanPrompt;
-            }
-          }
-        } else if (pType === 'message' && p.role === 'assistant') {
-          lastEventKind = 'AGENT_MSG';
-          if (!firstGenMs && tsMs) firstGenMs = tsMs;
-          if (tsMs) lastGenMs = tsMs;
-        } else if (pType === 'custom_tool_call' || pType === 'function_call') {
-          lastEventKind = 'TOOL_CALL';
-          if (!firstGenMs && tsMs) firstGenMs = tsMs;
-          if (tsMs) lastGenMs = tsMs;
-          const toolName = p.name || 'tool';
-          const summary = cleanCodexCommandText(p.input || p.arguments || toolName);
-          pendingTool = toolName === 'exec' ? summary : `${toolName}: ${summary}`;
-          currentAction = `⚡ 正在执行: ${pendingTool}`;
-        } else if (
-          pType === 'custom_tool_call_output' ||
-          pType === 'function_call_output' ||
-          pType === 'local_shell_call_output'
-        ) {
-          if (typeof p.output === 'string' && p.output.includes('本次任务的实际目标工作目录为')) {
-            const wd = extractTargetWorkdirFromText(p.output);
-            if (wd) targetWorkdir = wd;
-          }
-          pendingTool = '';
-          if (tsMs) nextReqStartMs = tsMs;
-        }
-      } else if (obj.type === 'event_msg') {
-        const evType = p.type || '';
-        if (evType === 'thread_settings_applied') {
-          const s = p.thread_settings || {};
-          if (s.model) curModel = s.model;
-          if (s.reasoning_effort) curEffort = s.reasoning_effort;
-        } else if (evType === 'task_started') {
-          turnCount++;
-          activeTurnId = p.turn_id || `turn-${turnCount}`;
-          turnStartedAtMs = tsMs;
-          turnCompletedAtMs = 0;
-          stepCountInTurn = 0;
-          cmdCountInTurn = 0;
-          fileCountInTurn = 0;
-          pendingTool = '';
-          currentAction = '';
-          lastEventKind = 'REASONING';
-          reqStartMs = tsMs;
-          firstGenMs = null;
-          lastGenMs = null;
-          nextReqStartMs = null;
-          activeTurnObj = {
-            turnIndex: turnCount,
-            turnId: activeTurnId,
-            promptPreview: pendingUserPrompt || '',
-            startedAtMs: tsMs,
-            completedAtMs: 0,
-            isAborted: false,
-          };
-          pendingUserPrompt = '';
-          codexTurns.push(activeTurnObj);
-        } else if (evType === 'task_complete' || evType === 'turn_aborted') {
-          if (activeTurnObj) {
-            activeTurnObj.completedAtMs = tsMs;
-            activeTurnObj.isAborted = evType === 'turn_aborted';
-            activeTurnObj = null;
-          }
-          activeTurnId = null;
-          turnCompletedAtMs = tsMs;
-          pendingTool = '';
-          currentAction = '';
-          lastEventKind = 'IDLE';
-          if (p.duration_ms) {
-            lastTurnDurationSec = Math.round(p.duration_ms / 1000);
-          } else if (turnStartedAtMs && tsMs > turnStartedAtMs) {
-            lastTurnDurationSec = Math.round((tsMs - turnStartedAtMs) / 1000);
-          }
-          if (p.last_agent_message) {
-            latestCommentary = String(p.last_agent_message).replace(/\s+/g, ' ').trim();
-          }
-          recentActions.push({
-            tsMs,
-            timeStr: fmtClockTime(tsMs),
-            kind: evType === 'turn_aborted' ? 'ABORT' : 'DONE',
-            icon: evType === 'turn_aborted' ? '🛑' : '✅',
-            summary:
-              evType === 'turn_aborted'
-                ? '回合已中止'
-                : `回合完成 (耗时 ${lastTurnDurationSec}s)`,
-          });
-        } else if (evType === 'error' || evType === 'stream_error') {
-          const msg = `${JSON.stringify(p.codex_error_info || {})} ${p.message || ''}`;
-          lastErrorText = p.message || String(p.codex_error_info || '');
-          if (/429|rate_limit|quota|overloaded|capacity/i.test(msg)) {
-            rateLimitErrorCount++;
-          } else {
-            streamErrorCount++;
-          }
-        } else if (evType === 'item_completed' && p.item) {
-          const it = p.item;
-          const isLlmOutputItem = it.type === 'AgentMessage' || it.type === 'Reasoning';
-          if (
-            isLlmOutputItem &&
-            Number.isFinite(p.started_at_ms) &&
-            Number.isFinite(p.completed_at_ms) &&
-            p.completed_at_ms >= p.started_at_ms
-          ) {
-            if (!firstGenMs || p.started_at_ms < firstGenMs) firstGenMs = p.started_at_ms;
-            if (!lastGenMs || p.completed_at_ms > lastGenMs) lastGenMs = p.completed_at_ms;
-          }
-
-          if (it.type === 'AgentMessage') {
-            const txt = (it.content || [])
-              .map((c) => c.text || '')
-              .join(' ')
-              .replace(/\s+/g, ' ')
-              .trim();
-            if (txt) {
-              latestCommentary = txt;
-              stepCountInTurn++;
-              recentActions.push({
-                tsMs,
-                timeStr: fmtClockTime(tsMs),
-                kind: 'COMMENTARY',
-                icon: '💬',
-                summary: txt.slice(0, 220),
-              });
-            }
-          } else if (it.type === 'CommandExecution') {
-            cmdCountInTurn++;
-            stepCountInTurn++;
-            pendingTool = '';
-            lastEventKind = 'CMD_DONE';
-            const cStr = cleanCodexCommandText(it.command);
-            currentAction = `💻 ${cStr}`;
-            recentActions.push({
-              tsMs,
-              timeStr: fmtClockTime(tsMs),
-              kind: 'CMD',
-              icon: '💻',
-              summary: cStr,
-            });
-          } else if (it.type === 'FileChange') {
-            fileCountInTurn++;
-            stepCountInTurn++;
-            pendingTool = '';
-            lastEventKind = 'FILE_DONE';
-            const files = Object.keys(it.changes || {}).map((f) => basename(f));
-            const fStr = `变更文件: ${files.join(', ')}`;
-            currentAction = `📝 ${fStr}`;
-            recentActions.push({
-              tsMs,
-              timeStr: fmtClockTime(tsMs),
-              kind: 'FILE',
-              icon: '📝',
-              summary: fStr,
-            });
-          } else if (it.type === 'Extension' || it.type === 'McpToolCall') {
-            stepCountInTurn++;
-            pendingTool = '';
-            const label = it.query ? `搜索: ${it.query}` : `${it.kind || it.type}`;
-            currentAction = `🔍 ${label}`;
-            recentActions.push({
-              tsMs,
-              timeStr: fmtClockTime(tsMs),
-              kind: 'TOOL',
-              icon: '🔍',
-              summary: label,
-            });
-          } else if (it.type === 'Reasoning') {
-            stepCountInTurn++;
-            lastEventKind = 'REASONING';
-          }
-        } else if (evType === 'token_count' && p.info) {
-          if (p.rate_limits) {
-            latestRateLimits = p.rate_limits;
-            if (tsMs > latestRateLimitsMs) latestRateLimitsMs = tsMs;
-          }
-          const last = p.info.last_token_usage || {};
-          const total = p.info.total_token_usage || {};
-          const maxContext = p.info.model_context_window || 258400;
-          const totalOut = total.output_tokens ?? 0;
-
-          if (totalOut !== prevTotalOutTokens && (last.output_tokens || 0) > 0) {
-            prevTotalOutTokens = totalOut;
-            const outTok = last.output_tokens || 0;
-            const thinkTok = last.reasoning_output_tokens || 0;
-            const respTok = Math.max(0, outTok - thinkTok);
-            const inTok = last.input_tokens || 0;
-            const cacheTok = last.cached_input_tokens || 0;
-            const ctxUsed = last.total_tokens || inTok + outTok;
-            const cacheHitRate = inTok > 0 ? +((cacheTok / inTok) * 100).toFixed(1) : 0;
-            const thinkingRatioPct = outTok > 0 ? +((thinkTok / outTok) * 100).toFixed(1) : 0;
-
-            const endMs = lastGenMs || tsMs;
-            const startMs = reqStartMs && endMs > reqStartMs ? reqStartMs : endMs - 2500;
-            const e2eSec = Math.max(0.3, (endMs - startMs) / 1000);
-            const streamSec =
-              firstGenMs && firstGenMs >= startMs && endMs > firstGenMs
-                ? Math.max(0.25, (endMs - firstGenMs) / 1000)
-                : Math.max(0.25, e2eSec * 0.68);
-            const ttftSec = Math.max(0.1, +(e2eSec - streamSec).toFixed(2));
-            const effectiveTps = +(outTok / e2eSec).toFixed(1);
-            const streamingTps = +(outTok / streamSec).toFixed(1);
-
-            const exactModelId = curEffort ? `${curModel}-${curEffort}` : curModel;
-            const sigKeyHex = '';
-
-            steps.push({
-              turnNumber: steps.length + 1,
-              userTurnIndex: Math.max(1, turnCount),
-              stepIndices: [steps.length + 1],
-              requestedEnum: exactModelId,
-              modelEnum: exactModelId,
-              requestedModelId: exactModelId,
-              exactModelId,
-              modelLabel: `Codex ${curModel} (${curEffort || 'med'})`,
-              modelTier: curEffort || 'med',
-              responseModel: curModel,
-              isRouteMismatch: false,
-              apiProvider: 'OPENAI_CODEX',
-              sessionID: threadId,
-              responseId: latestResponseId,
-              messageId: '',
-              traceId: latestResponseId.slice(0, 18),
-              retries: 0,
-              rateLimitRetries: 0,
-              netRetries: 0,
-              retryReason: '',
-              retryWaitSec: 0,
-              retryError: '',
-              sigKeyHex,
-              sigBytes: sigKeyHex ? 20 : 0,
-              inputTokens: Math.max(0, inTok - cacheTok),
-              outputTokens: outTok,
-              thinkingTokens: thinkTok,
-              responseTokens: respTok,
-              thinkingRatioPct,
-              cacheReadTokens: cacheTok,
-              ttftSec,
-              pureQueueSec: 0,
-              streamSec: +streamSec.toFixed(2),
-              activeGenSec: +streamSec.toFixed(2),
-              totalSec: +e2eSec.toFixed(2),
-              isBufferedFlush: outTok < 60,
-              streamingTps,
-              effectiveTps,
-              contextUsed: ctxUsed,
-              maxContext,
-              cacheHitRate,
-            });
-
-            reqStartMs = nextReqStartMs || tsMs;
-            firstGenMs = null;
-            lastGenMs = null;
-            nextReqStartMs = null;
-          }
-        }
-      }
-    }
-
-    // Aggregate summary across steps
-    let totalOutputTokens = 0;
-    let totalThinkingTokens = 0;
-    let totalSubstantiveTokens = 0;
-    let totalSubstantiveGenSec = 0;
-    let totalAllGenSec = 0;
-    let totalE2ESec = 0;
-    let peakStreamingTps = 0;
-    let peakEffectiveTps = 0;
-    let lastSubstantiveStep = null;
-
-    for (const s of steps) {
-      totalOutputTokens += s.outputTokens;
-      totalThinkingTokens += s.thinkingTokens;
-      totalAllGenSec += s.activeGenSec;
-      totalE2ESec += s.totalSec;
-      if (!s.isBufferedFlush) {
-        totalSubstantiveTokens += s.outputTokens;
-        totalSubstantiveGenSec += s.activeGenSec;
-        lastSubstantiveStep = s;
-        if (s.streamingTps > peakStreamingTps) peakStreamingTps = s.streamingTps;
-      }
-      if (s.effectiveTps > peakEffectiveTps) peakEffectiveTps = s.effectiveTps;
-    }
-    if (peakStreamingTps === 0 && steps.length > 0) {
-      peakStreamingTps = Math.max(...steps.map((s) => s.streamingTps));
-    }
-
-    const avgEffectiveTps = totalE2ESec > 0.05 ? +(totalOutputTokens / totalE2ESec).toFixed(1) : 0;
-    const avgStreamingTps =
-      totalSubstantiveGenSec > 0.4
-        ? +(totalSubstantiveTokens / totalSubstantiveGenSec).toFixed(1)
-        : totalAllGenSec > 0.4
-          ? +(totalOutputTokens / totalAllGenSec).toFixed(1)
-          : avgEffectiveTps;
-    const avgThinkingRatioPct =
-      totalOutputTokens > 0 ? +((totalThinkingTokens / totalOutputTokens) * 100).toFixed(1) : 0;
-    const latestStep = steps.length > 0 ? steps[steps.length - 1] : null;
-    const headlineStreamingTps =
-      lastSubstantiveStep?.streamingTps || avgStreamingTps || latestStep?.streamingTps || 0;
-
-    const result = {
-      hasUnclosedTurn: Boolean(activeTurnId),
-      activeTurnId,
-      targetWorkdir,
-      turnCount: Math.max(turnCount, 1),
-      turnStartedAtMs,
-      turnCompletedAtMs,
-      lastTurnDurationSec,
-      lastRecordMs,
-      curModel,
-      curEffort,
-      stepCountInTurn,
-      cmdCountInTurn,
-      fileCountInTurn,
-      latestCommentary,
-      currentAction,
-      pendingTool,
-      lastEventKind,
-      recentActions: recentActions.slice(-16),
-      latestRateLimits,
-      latestRateLimitsMs,
-      compactionCount,
-      streamErrorCount,
-      rateLimitErrorCount,
-      lastErrorText,
-      steps,
-      codexTurns,
-      summary: {
-        totalInvocations: steps.length,
-        totalOutputTokens,
-        totalThinkingTokens,
-        avgThinkingRatioPct,
-        totalRetries: rateLimitErrorCount + streamErrorCount,
-        totalRateLimitRetries: rateLimitErrorCount,
-        totalNetRetries: streamErrorCount,
-        routeMismatchCount: 0,
-        sessionDriftCount: 0,
-        headlineStreamingTps,
-        avgStreamingTps,
-        avgEffectiveTps,
-        peakStreamingTps,
-        peakEffectiveTps,
-        sigKeyHex: latestStep?.sigKeyHex || '',
-        sigBytes: latestStep?.sigBytes || 0,
-        stopReason: activeTurnId ? 'IN_PROGRESS' : 'COMPLETED',
-        healthLevel: rateLimitErrorCount > 0 ? 'WARN' : 'OK',
-        healthBadges: [],
-      },
-    };
-
-    codexRolloutCache.set(cleanPath, {
-      fileSize: st.size,
-      parsedAtMs: Date.now(),
-      result,
-    });
-    return result;
-  } catch {
-    return null;
-  }
-}
-
 function readCodexBridgeActiveMap() {
   try {
     if (!existsSync(CODEX_BRIDGE_ACTIVE_FILE)) return {};
@@ -2106,6 +1588,7 @@ function getCodexFleetData(nowMs) {
       totalInvocations: rollout?.summary?.totalInvocations || 1,
       isCurrentRunning: turnMetrics.isCurrentRunning,
       currentTurn: turnMetrics.currentTurn,
+      codexRolloutComplete: Boolean(rollout?.isCompleteFromStart),
       turns,
     });
   }
@@ -2195,6 +1678,10 @@ async function buildTelemetryPayload(requestedConvId) {
       const mtimeMs = info.lastModifiedTime ? new Date(info.lastModifiedTime).getTime() : 0;
       const parentId = info.trajectoryMetadata?.parentConversationId || '';
       const subagentRole = info.trajectoryMetadata?.subagentSpec?.role || '';
+      const subagentType =
+        info.trajectoryMetadata?.subagentSpec?.typeName ||
+        info.trajectoryMetadata?.agentScript?.name ||
+        '';
       candidateMap.set(cid, {
         conversationId: cid,
         title: info.annotations?.title || info.summary || readConversationTitle(cid),
@@ -2203,9 +1690,10 @@ async function buildTelemetryPayload(requestedConvId) {
         mtimeMs,
         workspaceLabel: extractWorkspaceLabel(info.workspaces),
         parentConversationId: parentId,
-        isSubagent: Boolean(parentId || subagentRole),
+        isSubagent: Boolean(parentId || subagentRole || subagentType),
         isArchived: false,
         subagentRole,
+        subagentType,
       });
     }
   } catch {
@@ -2369,6 +1857,7 @@ async function buildTelemetryPayload(requestedConvId) {
         isSubagent: item.isSubagent,
         isArchived: Boolean(item.isArchived),
         subagentRole: item.subagentRole,
+        subagentType: item.subagentType || '',
         mtimeMs: item.mtimeMs,
         stepCount,
         lastStepIndex: transcriptInfo?.lastStepIndex ?? null,
@@ -2498,8 +1987,32 @@ async function buildTelemetryPayload(requestedConvId) {
 
   // Track unexplained account quota drops & solo calibration window
   const localConvEstimates = getLocalQuotaEstimatesByConv();
-  const familyQuotaUsage = updateFamilyQuotaTracker({ quotaGroups, codexQuota, localConvEstimates, nowMs });
-  const quotaCalibration = updateQuotaCalibrationTracker({ quotaGroups, codexQuota, localConvEstimates, nowMs });
+  const recentLocalSpendByPool = getRecentLocalQuotaEstimatesByPool(nowMs);
+  const activeModelByPool = {};
+  for (const t of combinedFleet) {
+    const pk = t.engine === 'CODEX'
+      ? 'codex'
+      : /claude|sonnet|opus|gpt/i.test(`${t.exactModelId || ''} ${t.modelLabel || ''}`)
+        ? '3p'
+        : 'gemini';
+    if (!activeModelByPool[pk] && t.exactModelId && t.exactModelId !== '--') {
+      activeModelByPool[pk] = t.exactModelId;
+    }
+  }
+  const familyQuotaUsage = updateFamilyQuotaTracker({
+    quotaGroups,
+    codexQuota,
+    localConvEstimates,
+    recentLocalSpendByPool,
+    nowMs,
+  });
+  const quotaCalibration = updateQuotaCalibrationTracker({
+    quotaGroups,
+    codexQuota,
+    localConvEstimates,
+    activeModelByPool,
+    nowMs,
+  });
 
   // Nest subagents/swarm workers into roots, merge totals, and apply dismiss state
   const { roots, byId } = finalizeFleet({ tasks: combinedFleet, rootMap, nowMs });

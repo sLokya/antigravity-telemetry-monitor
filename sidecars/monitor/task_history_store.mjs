@@ -163,28 +163,36 @@ export function reconcileAndPersistHistory({ fleetTasks = [], nowMs = Date.now()
       mergedOrder.push(inc.turnId);
     }
 
-    // Keep archived older turns that may have scrolled out of live tail (e.g. Codex 1.5MB tail)
+    // Keep archived older turns only when live rollout is incomplete/missing;
+    // when a Codex rollout was parsed completely from byte 0, incomingTurns are authoritative.
     const liveIdSet = new Set(mergedOrder);
+    const hasCompleteCodexRollout =
+      task.engine === 'CODEX' && Boolean(task.codexRolloutComplete) && mergedOrder.length > 0;
     const hasStepTurn =
       task.engine !== 'CODEX' && mergedOrder.some((id) => id.includes(':step:'));
     const legacyWholeId = `${cid}:t-1`;
-    const archivedOlder = (convRec.turns || [])
-      .filter((pt) => {
-        if (!pt?.turnId || liveIdSet.has(pt.turnId)) return false;
-        if (hasStepTurn && pt.turnId === legacyWholeId) {
-          storeDirty = true;
-          return false;
-        }
-        return true;
-      })
-      .map((pt) =>
-        stripHeavyStepsForArchive({
-          ...pt,
-          isRunning: false,
-          status: pt.status === 'RUNNING' ? 'DONE' : pt.status,
-          quotaUsage: estimateTurnQuotaUsage(pt),
-        })
-      );
+    const archivedOlder = hasCompleteCodexRollout
+      ? []
+      : (convRec.turns || [])
+          .filter((pt) => {
+            if (!pt?.turnId || liveIdSet.has(pt.turnId)) return false;
+            if (hasStepTurn && pt.turnId === legacyWholeId) {
+              storeDirty = true;
+              return false;
+            }
+            return true;
+          })
+          .map((pt) =>
+            stripHeavyStepsForArchive({
+              ...pt,
+              isRunning: false,
+              status: pt.status === 'RUNNING' ? 'DONE' : pt.status,
+              quotaUsage: estimateTurnQuotaUsage(pt),
+            })
+          );
+    if (hasCompleteCodexRollout && (convRec.turns || []).some((pt) => pt?.turnId && !liveIdSet.has(pt.turnId))) {
+      storeDirty = true;
+    }
 
     const combinedAll = [
       ...archivedOlder,
@@ -265,4 +273,21 @@ export function getLocalQuotaEstimatesByConv() {
     }
   }
   return out;
+}
+
+export function getRecentLocalQuotaEstimatesByPool(nowMs = Date.now(), windowMs = 12 * 60 * 1000) {
+  const store = loadStore();
+  const cutoffMs = nowMs - windowMs;
+  const byPool = {};
+  for (const convRec of Object.values(store.conversations || {})) {
+    if (!convRec || typeof convRec !== 'object') continue;
+    const convUpdatedMs = Number(convRec.updatedAtMs) || 0;
+    if (convUpdatedMs < cutoffMs) continue;
+    for (const t of convRec.turns || []) {
+      const turnTs = Math.max(Number(t.completedAtMs) || 0, Number(t.startedAtMs) || 0, convUpdatedMs);
+      if (turnTs < cutoffMs) continue;
+      accumulateQuotaByPool(byPool, estimateTurnQuotaUsage(t));
+    }
+  }
+  return byPool;
 }

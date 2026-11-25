@@ -4,6 +4,7 @@ function cloneBucket(b) {
     remainingFraction: typeof b.remainingFraction === 'number' ? b.remainingFraction : null,
     resetTime: b.resetTime || null,
     disabled: Boolean(b.disabled),
+    ...(b.isFallback ? { isFallback: true } : {}),
   };
 }
 
@@ -23,12 +24,14 @@ export function cloneQuotaGroups(groups) {
 
 // Fill ONLY missing/null pool buckets from GetCascadeModelConfigData.
 // Never overwrite an already-present RetrieveUserQuotaSummary bucket,
-// preventing 5h/weekly cross-endpoint desync and in-place cache mutation.
+// and never inject dummy 100% catalog values for 3p (Claude & GPT) since
+// GetCascadeModelConfigData reports placeholder remainingFraction=1 for 3p.
 export function mergeCatalogQuotaFallback(modelCatalog, quotaGroups) {
   if (!modelCatalog || !quotaGroups) return quotaGroups;
   for (const entry of modelCatalog.values()) {
     if (typeof entry.remainingFraction !== 'number' || !entry.resetTime) continue;
     const is3p = /claude|sonnet|opus|gpt/i.test(String(entry.label || entry.modelId || ''));
+    if (is3p && entry.remainingFraction >= 0.999) continue;
     const poolKey = is3p ? '3p' : 'gemini';
     if (!quotaGroups[poolKey]) {
       quotaGroups[poolKey] = {
@@ -43,6 +46,7 @@ export function mergeCatalogQuotaFallback(modelCatalog, quotaGroups) {
         remainingFraction: entry.remainingFraction,
         resetTime: entry.resetTime,
         disabled: false,
+        isFallback: true,
       };
     }
   }

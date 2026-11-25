@@ -273,11 +273,153 @@
     };
   }
 
+  function formatCompactQuotaPoolTip(pk, b, rootEst, scopeLabel = '') {
+    const meta = poolMeta(pk);
+    const u5 = b?.fiveHourUsedPct;
+    const uw = b?.weeklyUsedPct;
+    const approx = Boolean(b?.isEstimated || rootEst || b?.isApproxConcurrent) ? '~' : '';
+    const wTokStr = b?.weightedTokens > 0 ? ` · ${fmtCompactTok(b.weightedTokens)} wTok` : '';
+    const f5Text =
+      u5 === null || u5 === undefined || u5 === 0
+        ? `${approx}${tHud('quotaBelowMin')}`
+        : `${approx}-${u5}%`;
+    const fwText =
+      uw === null || uw === undefined || uw === 0
+        ? `${approx}${tHud('quotaBelowMin')}`
+        : `${approx}-${uw}%`;
+    const prefix = scopeLabel ? `${scopeLabel} · ` : '';
+    return {
+      meta,
+      f5Text,
+      tip: `${prefix}${meta.label}: 5h ${f5Text} · ${tHud('quotaWeek')} ${fwText}${wTokStr}`,
+    };
+  }
+
+  function renderCompactQuotaInline(quotaUsage, opts = {}) {
+    const byPool = extractByPoolMap(quotaUsage, opts.fallbackPool);
+    const entries = byPool ? Object.entries(byPool) : [];
+    if (entries.length === 0) {
+      return opts.isRunning
+        ? `<span class="text-sky-600 dark:text-sky-400" title="${escapeHtml(tHud('quotaWaitTip'))}">…</span>`
+        : `<span class="text-[var(--muted-foreground)]" title="${escapeHtml(tHud('quotaNoneTip'))}">--</span>`;
+    }
+    const rootEst = Boolean(quotaUsage?.isEstimated || quotaUsage?.source === 'local_token_estimate');
+    const scopeLabel = opts.scopeLabel || '';
+    return entries
+      .map(([pk, b]) => {
+        const { meta, f5Text, tip } = formatCompactQuotaPoolTip(pk, b, rootEst, scopeLabel);
+        return `<span class="${meta.textCls} font-semibold whitespace-nowrap" title="${escapeHtml(tip)}">${meta.icon}${escapeHtml(f5Text)}</span>`;
+      })
+      .join(' ');
+  }
+
+  function renderCompactKpiStrip(turnTotals, sessionTotals, extras = {}) {
+    const tt = turnTotals || {};
+    const st = sessionTotals || {};
+    const useSession =
+      (st.totalTokens || 0) > 0 ||
+      Boolean(st.quotaUsage) ||
+      (Array.isArray(st.byModel) && st.byModel.length > 0);
+    const cum = useSession ? st : tt;
+
+    const sIn = cum.inputTokens || 0;
+    const sCache = cum.cacheReadTokens || 0;
+    const sOut = cum.outputTokens || 0;
+    const sTot = cum.totalTokens || 0;
+    const sHit = cum.cacheHitRate ?? 0;
+    const sPrompt = sIn + sCache;
+
+    const turnTag = tHud(extras.isCurrentRunning ? 'turnCur' : 'turnLast');
+    const tokTip = tHud('cardTokTip', fmtNum(sTot), fmtNum(sIn), fmtNum(sCache), fmtNum(sOut));
+    const cacheTip = tHud('cardCacheTip', sHit, fmtNum(sCache), fmtNum(sPrompt));
+
+    const avgStream = extras.avgStreamingTps || 0;
+    const avgEff = extras.avgEffectiveTps || 0;
+    const curStream = extras.streamingTps || 0;
+    const curEff = extras.effectiveTps || 0;
+    const speedMain =
+      avgStream > 0
+        ? `<strong class="text-emerald-600 dark:text-emerald-400">${avgStream}</strong><span class="text-[10px] text-[var(--muted-foreground)]">/s</span>`
+        : avgEff > 0
+          ? `<strong class="text-indigo-600 dark:text-indigo-400">${avgEff}</strong><span class="text-[10px] text-[var(--muted-foreground)]">/s</span>`
+          : curStream > 0
+            ? `<strong class="text-emerald-600 dark:text-emerald-400">${curStream}</strong><span class="text-[10px] text-[var(--muted-foreground)]">/s</span>`
+            : curEff > 0
+              ? `<strong class="text-indigo-600 dark:text-indigo-400">${curEff}</strong><span class="text-[10px] text-[var(--muted-foreground)]">/s</span>`
+              : `<span class="text-[var(--muted-foreground)]">--</span>`;
+    const speedTip = tHud('cardSpeedTip', avgStream || curStream, avgEff || curEff, turnTag, curStream);
+
+    const quotaScope = tHud('sessionTotal');
+    const byPool = extractByPoolMap(cum.quotaUsage);
+    const rootEst = Boolean(cum.quotaUsage?.isEstimated || cum.quotaUsage?.source === 'local_token_estimate');
+    const quotaCellTip = byPool && Object.keys(byPool).length > 0
+      ? Object.entries(byPool)
+          .map(([pk, b]) => formatCompactQuotaPoolTip(pk, b, rootEst, quotaScope).tip)
+          .join(' | ')
+      : extras.isRunning
+        ? tHud('quotaWaitTip')
+        : tHud('quotaNoneTip');
+
+    return `
+      <div class="task-kpi-strip mono tnum text-[11px] leading-tight">
+        <div class="min-w-0" title="${escapeHtml(tokTip)}">
+          <div class="text-[10px] font-sans text-[var(--muted-foreground)]">${escapeHtml(tHud('cardTokens'))}</div>
+          <div class="truncate"><strong class="text-indigo-600 dark:text-indigo-400">${fmtCompactTok(sTot)}</strong></div>
+        </div>
+        <div class="min-w-0" title="${escapeHtml(cacheTip)}">
+          <div class="text-[10px] font-sans text-[var(--muted-foreground)]">${escapeHtml(tHud('cardCacheHit'))}</div>
+          <div class="truncate"><strong class="text-amber-600 dark:text-amber-400">${sHit}%</strong> <span class="text-[10px] text-[var(--muted-foreground)]">${fmtCompactTok(sCache)}</span></div>
+        </div>
+        <div class="min-w-0" title="${escapeHtml(speedTip)}">
+          <div class="text-[10px] font-sans text-[var(--muted-foreground)]">${escapeHtml(tHud('cardSpeed'))}</div>
+          <div class="truncate">${speedMain}</div>
+        </div>
+        <div class="min-w-0" title="${escapeHtml(quotaCellTip)}">
+          <div class="text-[10px] font-sans text-[var(--muted-foreground)]">${escapeHtml(tHud('cardQuota'))}</div>
+          <div class="truncate flex items-center gap-1">${renderCompactQuotaInline(cum.quotaUsage, { isRunning: extras.isRunning, scopeLabel: quotaScope })}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCompactModelInline(byModel) {
+    if (!Array.isArray(byModel) || byModel.length === 0) return '';
+    const primary = byModel[0];
+    const meta = poolMeta(primary.quotaGroupKey);
+    const sumTok = byModel.reduce((acc, m) => acc + (m.totalTokens || 0), 0);
+    const tip = byModel
+      .map((m) => `${m.exactModelId || m.modelLabel}: ${fmtCompactTok(m.totalTokens || 0)} (${m.stepCount || 0} steps)`)
+      .join(' · ');
+
+    const multiBar =
+      byModel.length > 1
+        ? `<span class="inline-flex w-8 h-1.5 rounded-full overflow-hidden gap-px bg-[var(--hud-subtle)] shrink-0">${byModel
+            .map((m) => {
+              const pm = poolMeta(m.quotaGroupKey);
+              const pct = sumTok > 0 ? Math.max(8, (m.totalTokens / sumTok) * 100) : 100 / byModel.length;
+              return `<span class="${pm.barCls} h-full" style="width:${pct.toFixed(0)}%"></span>`;
+            })
+            .join('')}</span>`
+        : '';
+
+    return `
+      <span class="inline-flex items-center gap-1 text-[11px] mono text-[var(--muted-foreground)] min-w-0" title="${escapeHtml(tip)}">
+        <span class="w-1.5 h-1.5 rounded-full ${meta.dotCls} shrink-0"></span>
+        ${multiBar}
+        <span class="font-medium text-[var(--foreground)] truncate max-w-[140px]">${escapeHtml(fmtModelShort(primary.exactModelId || primary.modelLabel))}</span>
+        ${byModel.length > 1 ? `<span class="text-[10px] opacity-75">+${byModel.length - 1}</span>` : ''}
+      </span>
+    `;
+  }
+
   window.HudMetrics = {
     poolMeta,
     fmtCompactTok,
     fmtModelShort,
     renderQuotaChips,
+    renderCompactQuotaInline,
+    renderCompactKpiStrip,
+    renderCompactModelInline,
     renderModelBreakdown,
     renderModelTable,
     renderTotalsGrid,

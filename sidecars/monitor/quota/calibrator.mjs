@@ -1,12 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   CALIBRATION_STATE_FILE,
   DEFAULT_CALIBRATION_RULES,
   DEFAULT_POOL_RATES,
   QUOTA_RATES_OVERRIDE_FILE,
+  getPoolRateSignature,
   loadQuotaRatesConfig,
   readRawQuotaRatesOverride,
+  resolveModelQuotaRate,
   resetQuotaRatesOverride,
   saveQuotaPoolRateOverride,
 } from './contract.mjs';
@@ -18,6 +20,7 @@ const FLUSH_INTERVAL_MS = 4000;
 let state = null;
 let dirty = false;
 let lastFlushMs = 0;
+let lastFileMtimeMs = -1;
 
 function round2(n) {
   return +Number(n).toFixed(2);
@@ -32,6 +35,7 @@ function clamp(n, lo, hi) {
 }
 
 function readBucketPct(bucket) {
+  if (!bucket || bucket.isFallback) return null;
   const frac = bucket?.remainingFraction;
   if (typeof frac !== 'number' || !Number.isFinite(frac)) return null;
   return round4(Math.min(1, Math.max(0, frac)) * 100);
@@ -44,34 +48,32 @@ function parseIsoMs(iso) {
 }
 
 function loadState(stateFile = CALIBRATION_STATE_FILE) {
-  if (state && state._file === stateFile) return state;
+  let diskMtime = -1;
   try {
-    if (existsSync(stateFile)) {
+    if (existsSync(stateFile)) diskMtime = statSync(stateFile).mtimeMs;
+  } catch {
+    diskMtime = -1;
+  }
+  if (state && state._file === stateFile && diskMtime === lastFileMtimeMs) return state;
+  lastFileMtimeMs = diskMtime;
+  if (diskMtime >= 0) {
+    try {
       const parsed = JSON.parse(readFileSync(stateFile, 'utf-8'));
       if (parsed && typeof parsed === 'object' && parsed.pools && typeof parsed.pools === 'object') {
         state = {
           _file: stateFile,
           version: 1,
           updatedAtMs: Number(parsed.updatedAtMs) || Date.now(),
-          knownConvEst:
-            parsed.knownConvEst && typeof parsed.knownConvEst === 'object'
-              ? parsed.knownConvEst
-              : {},
+          knownConvEst: parsed.knownConvEst && typeof parsed.knownConvEst === 'object' ? parsed.knownConvEst : {},
+          reseedPools: parsed.reseedPools && typeof parsed.reseedPools === 'object' ? parsed.reseedPools : {},
+          poolRateSigs: parsed.poolRateSigs && typeof parsed.poolRateSigs === 'object' ? parsed.poolRateSigs : {},
           pools: parsed.pools,
         };
         return state;
       }
-    }
-  } catch {
-    // start fresh on corrupt state file
+    } catch { /* start fresh on corrupt state file */ }
   }
-  state = {
-    _file: stateFile,
-    version: 1,
-    updatedAtMs: 0,
-    knownConvEst: null,
-    pools: {},
-  };
+  state = { _file: stateFile, version: 1, updatedAtMs: 0, knownConvEst: null, reseedPools: {}, poolRateSigs: {}, pools: {} };
   return state;
 }
 
@@ -84,6 +86,7 @@ function saveState(st, nowMs, force = false) {
     const { _file: _drop, ...serializable } = st;
     serializable.updatedAtMs = nowMs;
     writeFileSync(st._file, JSON.stringify(serializable, null, 2), 'utf-8');
+    lastFileMtimeMs = statSync(st._file).mtimeMs;
     dirty = false;
     lastFlushMs = nowMs;
   } catch {
@@ -130,13 +133,19 @@ function computeLocalDeltas(st, localConvEstimates) {
   const nextKnown = cloneConvEstimates(localConvEstimates);
   if (st.knownConvEst === null) {
     st.knownConvEst = nextKnown;
+    st.reseedPools = {};
     dirty = true;
-    return { deltas, isFirstInit: true };
+    return { deltas, isFirstInit: true, reseededPools: new Set(POOLS) };
   }
+
+  const reseededPools = new Set(
+    Object.keys(st.reseedPools || {}).filter((pk) => Boolean(st.reseedPools[pk]))
+  );
 
   for (const [cid, currPools] of Object.entries(nextKnown)) {
     const prevPools = st.knownConvEst[cid] || {};
     for (const pk of POOLS) {
+      if (reseededPools.has(pk)) continue;
       const c = currPools[pk];
       if (!c) continue;
       const p = prevPools[pk] || { h5: 0, wk: 0, wTok: 0 };
@@ -156,7 +165,11 @@ function computeLocalDeltas(st, localConvEstimates) {
   }
 
   st.knownConvEst = nextKnown;
-  return { deltas, isFirstInit: false };
+  if (reseededPools.size > 0) {
+    st.reseedPools = {};
+    dirty = true;
+  }
+  return { deltas, isFirstInit: false, reseededPools };
 }
 
 function updateWindowState(winState, currPct, currReset, localDelta, wTokDelta, familyCfg, nowMs) {
@@ -218,34 +231,26 @@ function updateWindowState(winState, currPct, currReset, localDelta, wTokDelta, 
 
 function resolveEffectivePoolRate(pk, overrideFile, nowMs) {
   const def = DEFAULT_POOL_RATES[pk];
+  const raw = readRawQuotaRatesOverride(overrideFile);
+  const ov = raw?.pools?.[pk];
   if (overrideFile === QUOTA_RATES_OVERRIDE_FILE) {
     const cfg = loadQuotaRatesConfig(nowMs);
-    const raw = readRawQuotaRatesOverride(overrideFile);
-    const isOverridden = Boolean(raw?.pools?.[pk]);
     return {
       wTokPer1Pct5h: cfg.pools[pk].wTokPer1Pct5h,
       weeklyTo5hRatio: cfg.pools[pk].weeklyTo5hRatio,
-      isOverridden,
-      calibratedAtMs: Number(raw?.pools?.[pk]?.calibratedAtMs) || 0,
+      isOverridden: Boolean(ov),
+      calibratedAtMs: Number(ov?.calibratedAtMs) || 0,
     };
   }
-  const raw = readRawQuotaRatesOverride(overrideFile);
-  const ov = raw?.pools?.[pk];
   return {
-    wTokPer1Pct5h:
-      typeof ov?.wTokPer1Pct5h === 'number' && ov.wTokPer1Pct5h > 0
-        ? ov.wTokPer1Pct5h
-        : def.wTokPer1Pct5h,
-    weeklyTo5hRatio:
-      typeof ov?.weeklyTo5hRatio === 'number' && ov.weeklyTo5hRatio >= 0
-        ? ov.weeklyTo5hRatio
-        : def.weeklyTo5hRatio,
+    wTokPer1Pct5h: typeof ov?.wTokPer1Pct5h === 'number' && ov.wTokPer1Pct5h > 0 ? ov.wTokPer1Pct5h : def.wTokPer1Pct5h,
+    weeklyTo5hRatio: typeof ov?.weeklyTo5hRatio === 'number' && ov.weeklyTo5hRatio >= 0 ? ov.weeklyTo5hRatio : def.weeklyTo5hRatio,
     isOverridden: Boolean(ov),
     calibratedAtMs: Number(ov?.calibratedAtMs) || 0,
   };
 }
 
-function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
+function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs, activeModelText = '') {
   const rules = DEFAULT_CALIBRATION_RULES;
   const def = DEFAULT_POOL_RATES[pk];
   const h5 = poolState?.fiveHour || null;
@@ -259,9 +264,22 @@ function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
   const lastActivityMs = Math.max(h5?.lastLocalActivityAtMs || 0, wk?.lastLocalActivityAtMs || 0);
   const settledForOverestimate =
     lastActivityMs === 0 || nowMs - lastActivityMs >= rules.overestimateSettleMs;
+  const isExhaustedFloor = h5 !== null && h5.lastRemainingPct <= rules.minRemainingFloorPct;
+
+  let activeModelRate = null;
+  if (activeModelText) {
+    const resolved = resolveModelQuotaRate(activeModelText, pk, loadQuotaRatesConfig(nowMs));
+    activeModelRate = {
+      modelId: activeModelText,
+      wTokPer1Pct5h: resolved.wTokPer1Pct5h,
+      weeklyTo5hRatio: resolved.weeklyTo5hRatio,
+      differsFromPoolBase: resolved.wTokPer1Pct5h !== effectiveRate.wTokPer1Pct5h,
+    };
+  }
 
   const canCalibrate =
     h5 !== null &&
+    !isExhaustedFloor &&
     actualDrop5hPct >= rules.minActualDrop5hPct &&
     localEst5hPct >= rules.minLocalEst5hPct;
 
@@ -283,6 +301,9 @@ function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
 
     proposedRate = {
       wTokPer1Pct5h: nextWTok,
+      modelWTokPer1Pct5h: activeModelRate
+        ? Math.round(clamp(activeModelRate.wTokPer1Pct5h * clampedScale, rules.minWTokPer1Pct5h, rules.maxWTokPer1Pct5h))
+        : nextWTok,
       weeklyTo5hRatio: nextRatio,
       scaleFactor: round2(clampedScale),
       weeklyCalibrated: actualDropWeeklyPct >= rules.minWeeklyDropForRatioPct,
@@ -291,22 +312,17 @@ function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
 
   let overestimateAlert = null;
   const overDiffPct = round2(localEst5hPct - actualDrop5hPct);
-  const overRatio =
-    actualDrop5hPct >= 0.5
-      ? round2(localEst5hPct / actualDrop5hPct)
-      : localEst5hPct >= rules.overestimateMinDiffPct
-        ? round2(localEst5hPct / 0.5)
-        : 0;
+  const overRatio = actualDrop5hPct >= 0.5 ? round2(localEst5hPct / actualDrop5hPct) : 0;
 
   if (
     h5 !== null &&
+    !isExhaustedFloor &&
     settledForOverestimate &&
+    actualDrop5hPct >= rules.overestimateMinActualDrop5hPct &&
     overDiffPct >= rules.overestimateMinDiffPct &&
-    localEst5hPct >= Math.max(actualDrop5hPct, 0.5) * rules.overestimateMinRatio
+    localEst5hPct >= actualDrop5hPct * rules.overestimateMinRatio
   ) {
-    // Conservative denominator when actualDrop < 2% to absorb 1% integer quantization
-    const denom = actualDrop5hPct >= 2.0 ? actualDrop5hPct : Math.max(actualDrop5hPct + 0.5, 1.0);
-    const rawScale = clamp(localEst5hPct / denom, 1.1, rules.maxScaleFactor);
+    const rawScale = clamp(localEst5hPct / actualDrop5hPct, 1.1, rules.maxScaleFactor);
     const suggestedWTokPer1Pct5h = Math.round(
       clamp(
         effectiveRate.wTokPer1Pct5h * rawScale,
@@ -323,12 +339,18 @@ function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
       ratio: overRatio,
       suggestedWTokPer1Pct5h,
       currentWTokPer1Pct5h: effectiveRate.wTokPer1Pct5h,
+      activeModelId: activeModelRate?.modelId || '',
+      currentModelWTokPer1Pct5h: activeModelRate?.wTokPer1Pct5h || effectiveRate.wTokPer1Pct5h,
+      suggestedModelWTokPer1Pct5h: activeModelRate
+        ? Math.round(clamp(activeModelRate.wTokPer1Pct5h * rawScale, rules.minWTokPer1Pct5h, rules.maxWTokPer1Pct5h))
+        : suggestedWTokPer1Pct5h,
     };
   }
 
   return {
     poolKey: pk,
     hasSnapshot: h5 !== null,
+    isExhaustedFloor,
     currentRemaining5hPct: h5 ? round2(h5.lastRemainingPct) : null,
     baselineRemaining5hPct: h5 ? round2(h5.baselineRemainingPct) : null,
     actualDrop5hPct,
@@ -340,6 +362,7 @@ function evaluatePoolCalibration(pk, poolState, effectiveRate, nowMs) {
     soloMarkedAtMs: Number(poolState?.soloMarkedAtMs) || 0,
     soloMode: Number(poolState?.soloMarkedAtMs) > 0,
     currentRate: effectiveRate,
+    activeModelRate,
     defaultRate: {
       wTokPer1Pct5h: def.wTokPer1Pct5h,
       weeklyTo5hRatio: def.weeklyTo5hRatio,
@@ -354,14 +377,25 @@ export function updateQuotaCalibrationTracker({
   quotaGroups = null,
   codexQuota = null,
   localConvEstimates = {},
+  activeModelByPool = {},
   nowMs = Date.now(),
   stateFile = CALIBRATION_STATE_FILE,
   overrideFile = QUOTA_RATES_OVERRIDE_FILE,
 } = {}) {
-  const familyCfg = loadQuotaRatesConfig(nowMs).familyDetection;
+  const ratesCfg = loadQuotaRatesConfig(nowMs);
+  const familyCfg = ratesCfg.familyDetection;
   const st = loadState(stateFile);
+  if (!st.poolRateSigs || typeof st.poolRateSigs !== 'object') st.poolRateSigs = {};
+  for (const pk of POOLS) {
+    const sig = getPoolRateSignature(pk, ratesCfg);
+    if (st.poolRateSigs[pk] !== sig) {
+      if (st.knownConvEst !== null) st.reseedPools = { ...(st.reseedPools || {}), [pk]: true };
+      st.poolRateSigs[pk] = sig;
+      dirty = true;
+    }
+  }
   const snapshots = extractPoolSnapshots(quotaGroups, codexQuota);
-  const { deltas, isFirstInit } = computeLocalDeltas(st, localConvEstimates);
+  const { deltas, isFirstInit, reseededPools } = computeLocalDeltas(st, localConvEstimates);
 
   const pools = {};
   const overestimateAlerts = [];
@@ -371,12 +405,13 @@ export function updateQuotaCalibrationTracker({
     const snap = snapshots[pk];
     if (!st.pools[pk]) st.pools[pk] = { fiveHour: null, weekly: null, soloMarkedAtMs: 0 };
 
+    const skipDelta = isFirstInit || reseededPools.has(pk);
     for (const win of WINDOWS) {
       const bucket = snap?.[win] || null;
       const currPct = readBucketPct(bucket);
       const currReset = bucket?.resetTime || null;
-      const deltaLocal = isFirstInit ? 0 : deltas[pk][win];
-      const deltaWTok = isFirstInit ? 0 : win === 'fiveHour' ? deltas[pk].wTok : 0;
+      const deltaLocal = skipDelta ? 0 : deltas[pk][win];
+      const deltaWTok = skipDelta ? 0 : win === 'fiveHour' ? deltas[pk].wTok : 0;
       const prevStarted = st.pools[pk][win]?.startedAtMs || 0;
       st.pools[pk][win] = updateWindowState(
         st.pools[pk][win],
@@ -395,7 +430,13 @@ export function updateQuotaCalibrationTracker({
     const effectiveRate = resolveEffectivePoolRate(pk, overrideFile, nowMs);
     if (effectiveRate.isOverridden) hasOverrides = true;
 
-    const evalPool = evaluatePoolCalibration(pk, st.pools[pk], effectiveRate, nowMs);
+    const evalPool = evaluatePoolCalibration(
+      pk,
+      st.pools[pk],
+      effectiveRate,
+      nowMs,
+      activeModelByPool?.[pk] || ''
+    );
     pools[pk] = evalPool;
     if (evalPool.overestimateAlert?.active) {
       overestimateAlerts.push(evalPool.overestimateAlert);
@@ -414,6 +455,30 @@ export function updateQuotaCalibrationTracker({
   };
 }
 
+function resetPoolWindows(p, nowMs, soloMarkedAtMs = 0) {
+  if (!p) return;
+  p.soloMarkedAtMs = soloMarkedAtMs;
+  for (const win of WINDOWS) {
+    const w = p[win];
+    if (!w || typeof w.lastRemainingPct !== 'number') continue;
+    w.baselineRemainingPct = w.lastRemainingPct;
+    w.localEstPct = 0;
+    w.localWTok = 0;
+    w.startedAtMs = nowMs;
+    w.lastLocalActivityAtMs = 0;
+  }
+}
+
+function markPoolsForReseed(st, targets) {
+  if (targets.length === POOLS.length) {
+    st.knownConvEst = null;
+    st.reseedPools = {};
+  } else {
+    st.reseedPools = { ...(st.reseedPools || {}) };
+    for (const pk of targets) st.reseedPools[pk] = true;
+  }
+}
+
 export function startSoloCalibrationWindow({
   poolKey = '',
   nowMs = Date.now(),
@@ -421,21 +486,8 @@ export function startSoloCalibrationWindow({
 } = {}) {
   const st = loadState(stateFile);
   const targets = poolKey && POOLS.includes(poolKey) ? [poolKey] : POOLS;
-  for (const pk of targets) {
-    const p = st.pools?.[pk];
-    if (!p) continue;
-    p.soloMarkedAtMs = nowMs;
-    for (const win of WINDOWS) {
-      const w = p[win];
-      if (!w || typeof w.lastRemainingPct !== 'number') continue;
-      w.baselineRemainingPct = w.lastRemainingPct;
-      w.localEstPct = 0;
-      w.localWTok = 0;
-      w.startedAtMs = nowMs;
-      w.lastLocalActivityAtMs = 0;
-    }
-  }
-  st.knownConvEst = null;
+  for (const pk of targets) resetPoolWindows(st.pools?.[pk], nowMs, nowMs);
+  markPoolsForReseed(st, targets);
   dirty = true;
   saveState(st, nowMs, true);
   return { ok: true, poolKey: poolKey || 'all', startedAtMs: nowMs };
@@ -489,17 +541,8 @@ export function applyPoolCalibration({
   );
 
   // Re-baseline this pool cleanly after rate update
-  p.soloMarkedAtMs = 0;
-  for (const win of WINDOWS) {
-    const w = p[win];
-    if (!w || typeof w.lastRemainingPct !== 'number') continue;
-    w.baselineRemainingPct = w.lastRemainingPct;
-    w.localEstPct = 0;
-    w.localWTok = 0;
-    w.startedAtMs = nowMs;
-    w.lastLocalActivityAtMs = 0;
-  }
-  st.knownConvEst = null;
+  resetPoolWindows(p, nowMs, 0);
+  markPoolsForReseed(st, [poolKey]);
   dirty = true;
   saveState(st, nowMs, true);
 
@@ -521,21 +564,8 @@ export function resetCalibratedPoolRates({
   resetQuotaRatesOverride(poolKey, overrideFile);
   const st = loadState(stateFile);
   const targets = poolKey && POOLS.includes(poolKey) ? [poolKey] : POOLS;
-  for (const pk of targets) {
-    const p = st.pools?.[pk];
-    if (!p) continue;
-    p.soloMarkedAtMs = 0;
-    for (const win of WINDOWS) {
-      const w = p[win];
-      if (!w || typeof w.lastRemainingPct !== 'number') continue;
-      w.baselineRemainingPct = w.lastRemainingPct;
-      w.localEstPct = 0;
-      w.localWTok = 0;
-      w.startedAtMs = nowMs;
-      w.lastLocalActivityAtMs = 0;
-    }
-  }
-  st.knownConvEst = null;
+  for (const pk of targets) resetPoolWindows(st.pools?.[pk], nowMs, 0);
+  markPoolsForReseed(st, targets);
   dirty = true;
   saveState(st, nowMs, true);
   return {
@@ -549,4 +579,5 @@ export function clearCalibrationCacheForTest() {
   state = null;
   dirty = false;
   lastFlushMs = 0;
+  lastFileMtimeMs = -1;
 }

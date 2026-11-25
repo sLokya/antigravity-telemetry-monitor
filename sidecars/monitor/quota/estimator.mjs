@@ -16,6 +16,16 @@ export function computeWeightedTokens(
   return inT * weights.input + cacheT * weights.cacheRead + outT * weights.output;
 }
 
+function inferFallbackPool(meta) {
+  if (meta?.quotaGroupKey && (meta.quotaGroupKey === '3p' || meta.quotaGroupKey === 'codex' || meta.quotaGroupKey === 'gemini')) {
+    return meta.quotaGroupKey;
+  }
+  const text = `${meta?.exactModelId || ''} ${meta?.modelLabel || ''} ${meta?.responseModel || ''}`;
+  if (meta?.apiProvider === 'OPENAI_CODEX' || /\bastra\b|\bsol\b|\bcodex\b/i.test(text)) return 'codex';
+  if (/claude|sonnet|opus|haiku|gpt/i.test(text)) return '3p';
+  return 'gemini';
+}
+
 export function estimateQuotaFromByModel(byModel = [], fallbackMeta = null) {
   const config = loadQuotaRatesConfig();
   const accumByPool = new Map();
@@ -31,7 +41,8 @@ export function estimateQuotaFromByModel(byModel = [], fallbackMeta = null) {
           {
             exactModelId: fallbackMeta.exactModelId || fallbackMeta.modelLabel || '',
             modelLabel: fallbackMeta.modelLabel || '',
-            quotaGroupKey: fallbackMeta.quotaGroupKey || 'gemini',
+            responseModel: fallbackMeta.responseModel || '',
+            quotaGroupKey: inferFallbackPool(fallbackMeta),
             inputTokens: fallbackMeta.inputTokens || 0,
             cacheReadTokens: fallbackMeta.cacheReadTokens || 0,
             outputTokens: fallbackMeta.outputTokens || 0,
@@ -93,7 +104,9 @@ export function estimateTurnQuotaUsage(turn) {
   return estimateQuotaFromByModel(turn.byModel, {
     exactModelId: turn.exactModelId || turn.responseModel || '',
     modelLabel: turn.modelLabel || '',
-    quotaGroupKey: turn.quotaGroupKey || 'gemini',
+    responseModel: turn.responseModel || '',
+    apiProvider: turn.apiProvider || '',
+    quotaGroupKey: turn.quotaGroupKey || '',
     inputTokens: turn.inputTokens || 0,
     cacheReadTokens: turn.cacheReadTokens || 0,
     outputTokens: turn.outputTokens || 0,

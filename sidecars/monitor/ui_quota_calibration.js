@@ -58,16 +58,13 @@
     if (btn && btnLabel) {
       if (alerts.length > 0) {
         btnLabel.textContent = `${tHud('btnCalib')} (${alerts.length})`;
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-btn border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold';
       } else if (hasOverrides) {
         btnLabel.textContent = tHud('btnCalibActive');
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-emerald-500/45 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-medium transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-btn border-emerald-500/45 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-semibold';
       } else {
         btnLabel.textContent = tHud('btnCalib');
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] hover:border-sky-500/50 hover:text-sky-500 font-medium transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-btn';
       }
       btn.setAttribute('aria-expanded', String(calibDrawerOpen));
     }
@@ -79,12 +76,15 @@
         alertBanner.innerHTML = alerts
           .map((a) => {
             const meta = POOL_STYLE[a.poolKey] || { icon: '•', label: a.poolKey, cls: '' };
+            const curDisp = a.currentModelWTokPer1Pct5h || a.currentWTokPer1Pct5h;
+            const sugDisp = a.suggestedModelWTokPer1Pct5h || a.suggestedWTokPer1Pct5h;
+            const modelTag = a.activeModelId ? `${a.activeModelId}: ` : '';
             return `
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div class="flex items-center gap-1.5 flex-wrap text-[11px]">
                   <span>⚠️</span>
                   <span class="font-bold text-amber-700 dark:text-amber-300">${escapeHtml(tHud('calibOverAlert', meta.label, a.actualDrop5hPct, a.localEst5hPct))}</span>
-                  <span class="mono text-[var(--muted-foreground)]">(${fmtRateTok(a.currentWTokPer1Pct5h)} → ${fmtRateTok(a.suggestedWTokPer1Pct5h)} wTok/1%)</span>
+                  <span class="mono text-[var(--muted-foreground)]">(${escapeHtml(modelTag)}${fmtRateTok(curDisp)} → ${fmtRateTok(sugDisp)} wTok/1%)</span>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
                   <button type="button" onclick="runQuotaCalibAction(event, 'apply_overestimate_fix', '${a.poolKey}')"
@@ -139,6 +139,13 @@
           const p = pools[pk] || {};
           const meta = POOL_STYLE[pk];
           const cur = p.currentRate || { wTokPer1Pct5h: 0, weeklyTo5hRatio: 0, isOverridden: false };
+          const amr = p.activeModelRate || null;
+          const displayRate = amr?.wTokPer1Pct5h || cur.wTokPer1Pct5h;
+          const displayRatio = amr?.weeklyTo5hRatio ?? cur.weeklyTo5hRatio;
+          const displayProposed = amr?.differsFromPoolBase
+            ? p.proposedRate?.modelWTokPer1Pct5h || p.proposedRate?.wTokPer1Pct5h
+            : p.proposedRate?.wTokPer1Pct5h;
+          const modelNote = amr?.differsFromPoolBase ? ` (${escapeHtml(amr.modelId)})` : '';
           const over = p.overestimateAlert?.active ? p.overestimateAlert : null;
           const statusBadge = over
             ? `<span class="px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35 text-[10px] font-bold">${escapeHtml(tHud('calibTagOver'))}</span>`
@@ -170,13 +177,13 @@
                 ${statusBadge}
               </div>
               <div class="text-[10px] text-[var(--muted-foreground)] space-y-0.5">
-                <div>${escapeHtml(tHud('calibCurRate'))}: <strong class="text-[var(--foreground)]">${fmtRateTok(cur.wTokPer1Pct5h)}</strong> /1% · ${escapeHtml(tHud('quotaWeek'))}/5h <strong class="text-[var(--foreground)]">${cur.weeklyTo5hRatio}</strong></div>
-                <div>5h: ${escapeHtml(tHud('calibActualShort'))} <strong class="text-[var(--foreground)]">${p.actualDrop5hPct ?? 0}%</strong> / ${escapeHtml(tHud('calibEstShort'))} <strong>~${p.localEst5hPct ?? 0}%</strong></div>
+                <div>${escapeHtml(tHud('calibCurRate'))}: <strong class="text-[var(--foreground)]">${fmtRateTok(displayRate)}</strong> /1%${modelNote} · ${escapeHtml(tHud('quotaWeek'))}/5h <strong class="text-[var(--foreground)]">${displayRatio}</strong></div>
+                <div>5h: ${escapeHtml(tHud('calibActualShort'))} <strong class="text-[var(--foreground)]">${p.actualDrop5hPct ?? 0}%</strong> / ${escapeHtml(tHud('calibEstShort'))} <strong>~${p.localEst5hPct ?? 0}%</strong>${p.isExhaustedFloor ? ' <span class="text-rose-500">(0%)</span>' : ''}</div>
                 ${(p.actualDropWeeklyPct || 0) > 0 || (p.localEstWeeklyPct || 0) > 0 ? `
                   <div>${escapeHtml(tHud('quotaWeek'))}: ${escapeHtml(tHud('calibActualShort'))} <strong class="text-[var(--foreground)]">${p.actualDropWeeklyPct ?? 0}%</strong> / ${escapeHtml(tHud('calibEstShort'))} <strong>~${p.localEstWeeklyPct ?? 0}%</strong></div>
                 ` : ''}
                 ${p.proposedRate ? `
-                  <div class="text-sky-600 dark:text-sky-400">→ ${fmtRateTok(p.proposedRate.wTokPer1Pct5h)} /1% (${p.proposedRate.scaleFactor}×${p.proposedRate.weeklyCalibrated ? `, ${tHud('quotaWeek')}/5h ${p.proposedRate.weeklyTo5hRatio}` : ''})</div>
+                  <div class="text-sky-600 dark:text-sky-400">→ ${fmtRateTok(displayProposed)} /1% (${p.proposedRate.scaleFactor}×${p.proposedRate.weeklyCalibrated ? `, ${tHud('quotaWeek')}/5h ${p.proposedRate.weeklyTo5hRatio}` : ''})</div>
                 ` : ''}
               </div>
               <div class="flex flex-wrap items-center gap-1 pt-0.5 font-sans">

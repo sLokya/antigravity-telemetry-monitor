@@ -27,20 +27,26 @@ export const CALIBRATION_STATE_FILE = join(
 );
 
 export const DEFAULT_FAMILY_DETECTION = Object.freeze({
-  minFiveHourExcessPct: 2.0,
+  minFiveHourExcessPct: 3.0,
   minWeeklyExcessPct: 1.0,
-  minRelativeRatio: 0.35,
+  minRelativeRatio: 0.45,
   refillResetPct: 1.0,
   resetShiftMs: 10 * 60 * 1000,
+  delayedSettlementWindowMs: 12 * 60 * 1000,
+  delayedSettlementFactor: 1.25,
+  activeGapMinWeeklyExcessPct: 0.8,
+  activeGapOverride5hExcessPct: 6.0,
 });
 
 export const DEFAULT_CALIBRATION_RULES = Object.freeze({
   minActualDrop5hPct: 2.0,
   minLocalEst5hPct: 0.3,
   minWeeklyDropForRatioPct: 0.5,
-  overestimateMinDiffPct: 2.0,
-  overestimateMinRatio: 1.35,
-  overestimateSettleMs: 20 * 1000,
+  overestimateMinActualDrop5hPct: 2.0,
+  overestimateMinDiffPct: 4.0,
+  overestimateMinRatio: 1.45,
+  overestimateSettleMs: 120 * 1000,
+  minRemainingFloorPct: 0.5,
   minScaleFactor: 0.2,
   maxScaleFactor: 5.0,
   minWTokPer1Pct5h: 2000,
@@ -53,22 +59,22 @@ export const DEFAULT_TOKEN_WEIGHTS = Object.freeze({
   output: 5.0,
 });
 
-// Calibrated from solo-turn baselines (upper-quartile wTok per 1% of 5h quota)
+// Calibrated from solo-turn baselines (wTok per 1% of 5h quota)
 // so shared-account / concurrent usage cannot contaminate per-turn cost.
 export const DEFAULT_POOL_RATES = Object.freeze({
-  gemini: Object.freeze({ wTokPer1Pct5h: 800000, weeklyTo5hRatio: 0.25 }),
-  '3p': Object.freeze({ wTokPer1Pct5h: 85000, weeklyTo5hRatio: 0.5 }),
-  codex: Object.freeze({ wTokPer1Pct5h: 80000, weeklyTo5hRatio: 0.25 }),
+  gemini: Object.freeze({ wTokPer1Pct5h: 750000, weeklyTo5hRatio: 0.25 }),
+  '3p': Object.freeze({ wTokPer1Pct5h: 110000, weeklyTo5hRatio: 0.5 }),
+  codex: Object.freeze({ wTokPer1Pct5h: 78000, weeklyTo5hRatio: 0.17 }),
 });
 
 export const DEFAULT_MODEL_PATTERNS = Object.freeze([
-  { match: /claude.*opus/i, pool: '3p', wTokPer1Pct5h: 85000, weeklyTo5hRatio: 0.5 },
-  { match: /claude.*sonnet/i, pool: '3p', wTokPer1Pct5h: 170000, weeklyTo5hRatio: 0.5 },
-  { match: /claude.*haiku/i, pool: '3p', wTokPer1Pct5h: 450000, weeklyTo5hRatio: 0.5 },
-  { match: /\bastra\b/i, pool: 'codex', wTokPer1Pct5h: 8000, weeklyTo5hRatio: 0.16 },
-  { match: /\bsol\b|\bcodex\b/i, pool: 'codex', wTokPer1Pct5h: 80000, weeklyTo5hRatio: 0.25 },
+  { match: /claude.*opus/i, pool: '3p', wTokPer1Pct5h: 110000, weeklyTo5hRatio: 0.5 },
+  { match: /claude.*sonnet/i, pool: '3p', wTokPer1Pct5h: 220000, weeklyTo5hRatio: 0.5 },
+  { match: /claude.*haiku/i, pool: '3p', wTokPer1Pct5h: 550000, weeklyTo5hRatio: 0.5 },
+  { match: /\bastra\b/i, pool: 'codex', wTokPer1Pct5h: 15500, weeklyTo5hRatio: 0.145 },
+  { match: /\bsol\b|\bcodex\b/i, pool: 'codex', wTokPer1Pct5h: 78000, weeklyTo5hRatio: 0.17 },
   { match: /\b(hydrogen|flash|lite|mini)\b/i, pool: 'gemini', wTokPer1Pct5h: 1800000, weeklyTo5hRatio: 0.25 },
-  { match: /\b(neon|carbon|pro|gemini)\b/i, pool: 'gemini', wTokPer1Pct5h: 800000, weeklyTo5hRatio: 0.25 },
+  { match: /\b(neon|carbon|pro|gemini)\b/i, pool: 'gemini', wTokPer1Pct5h: 750000, weeklyTo5hRatio: 0.25 },
 ]);
 
 let cachedConfig = null;
@@ -163,6 +169,22 @@ export function loadQuotaRatesConfig(nowMs = Date.now()) {
       userOverride?.familyDetection?.resetShiftMs,
       DEFAULT_FAMILY_DETECTION.resetShiftMs
     ),
+    delayedSettlementWindowMs: validPos(
+      userOverride?.familyDetection?.delayedSettlementWindowMs,
+      DEFAULT_FAMILY_DETECTION.delayedSettlementWindowMs
+    ),
+    delayedSettlementFactor: validPos(
+      userOverride?.familyDetection?.delayedSettlementFactor,
+      DEFAULT_FAMILY_DETECTION.delayedSettlementFactor
+    ),
+    activeGapMinWeeklyExcessPct: validNonNeg(
+      userOverride?.familyDetection?.activeGapMinWeeklyExcessPct,
+      DEFAULT_FAMILY_DETECTION.activeGapMinWeeklyExcessPct
+    ),
+    activeGapOverride5hExcessPct: validPos(
+      userOverride?.familyDetection?.activeGapOverride5hExcessPct,
+      DEFAULT_FAMILY_DETECTION.activeGapOverride5hExcessPct
+    ),
   };
 
   cachedConfig = { weights, pools, customModels, familyDetection };
@@ -216,6 +238,21 @@ export function invalidateQuotaRatesCache() {
   cachedConfig = null;
   cachedAtMs = 0;
   cachedMtimeMs = -1;
+}
+
+export function getPoolRateSignature(poolKey, config = loadQuotaRatesConfig()) {
+  const w = config.weights || DEFAULT_TOKEN_WEIGHTS;
+  const pool = config.pools?.[poolKey] || DEFAULT_POOL_RATES[poolKey] || {};
+  const pats = DEFAULT_MODEL_PATTERNS
+    .filter((p) => p.pool === poolKey)
+    .map((p) => `${p.match.source}:${p.wTokPer1Pct5h}:${p.weeklyTo5hRatio}`)
+    .join(',');
+  const customs = Object.entries(config.customModels || {})
+    .filter(([, ov]) => !ov.pool || ov.pool === poolKey)
+    .map(([k, ov]) => `${k}:${ov.wTokPer1Pct5h}:${ov.weeklyTo5hRatio}`)
+    .sort()
+    .join(',');
+  return `${w.input}|${w.cacheRead}|${w.output}|${pool.wTokPer1Pct5h}|${pool.weeklyTo5hRatio}|${pats}|${customs}`;
 }
 
 export function readRawQuotaRatesOverride(overrideFile = QUOTA_RATES_OVERRIDE_FILE) {

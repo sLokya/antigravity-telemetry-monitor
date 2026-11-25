@@ -49,18 +49,16 @@
       const targetTag = upd.remoteTag || (upd.remoteVersion ? `v${upd.remoteVersion}` : upd.remoteShortSha || '');
       if (upd.needsReload) {
         btnLabel.textContent = tHud('updReloadShort');
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-menu-item text-emerald-700 dark:text-emerald-300 font-bold';
       } else if (showAlert) {
         btnLabel.textContent = targetTag ? `${tHud('updNewShort')} ${targetTag}` : tHud('updNewShort');
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-sky-500/60 bg-sky-500/15 text-sky-600 dark:text-sky-400 font-bold transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-menu-item text-sky-600 dark:text-sky-400 font-bold';
       } else {
         btnLabel.textContent = `v${upd.localVersion || '1.0'}`;
-        btn.className =
-          'text-[11px] sm:text-xs px-2 py-1 rounded-lg border border-[var(--hud-border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:border-sky-500/50 hover:text-sky-500 font-medium mono transition flex items-center gap-1 whitespace-nowrap';
+        btn.className = 'hud-menu-item';
       }
       btn.setAttribute('aria-expanded', String(updateDrawerOpen));
+      if (typeof window.syncHudMoreDot === 'function') window.syncHudMoreDot();
     }
 
     const drawer = document.getElementById('pluginUpdateDrawer');

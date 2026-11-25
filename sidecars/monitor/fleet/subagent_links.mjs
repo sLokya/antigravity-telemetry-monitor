@@ -7,8 +7,14 @@ const CONV_ID_RE = /\\?"conversation_?[iI]d\\?"\s*:\s*\\?"([0-9a-fA-F]{8}-[0-9a-
 const NAME_RE = /\\?"name\\?"\s*:\s*\\?"([^"\\]+)/;
 const CREATED_AT_RE = /"created_at"\s*:\s*"([^"]+)"/;
 
+const SPAWN_CONTEXT_RE = /invoke_subagent|subagent|swarm|worker|spawned|send_message/i;
+
 function extractLineLinks(line, parentId) {
-  if (!line || (!line.includes('onversation_id') && !line.includes('onversationId'))) {
+  if (
+    !line ||
+    (!line.includes('onversation_id') && !line.includes('onversationId')) ||
+    !SPAWN_CONTEXT_RE.test(line)
+  ) {
     return [];
   }
 
